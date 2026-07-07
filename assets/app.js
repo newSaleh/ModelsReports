@@ -26,9 +26,10 @@
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
   var DEFAULT_SETTINGS = {
-    hotSoldMin: 5,             // minimum weekly sales in a branch to call it "selling well"
-    criticalWeeksLeft: 1,      // less than this many weeks of cover -> needs a reorder
-    opportunityMinTotalSold: 15 // sold this well elsewhere to justify stocking a new branch
+    hotSoldMin: 5,              // minimum weekly sales in a branch to call it "selling well"
+    criticalWeeksLeft: 1,       // less than this many weeks of cover -> needs a reorder
+    opportunityMinTotalSold: 15, // sold this well elsewhere to justify stocking a new branch
+    maxBalance: 150             // current balance above this -> flagged as overstock/surplus
   };
 
   function branchField(code, suffix) { return code + suffix; }
@@ -190,11 +191,13 @@
     var hotEl = document.getElementById('setHotSoldMin');
     var weeksEl = document.getElementById('setCriticalWeeks');
     var oppEl = document.getElementById('setOpportunityMin');
+    var maxBalEl = document.getElementById('setMaxBalance');
 
     function syncInputs() {
       hotEl.value = state.settings.hotSoldMin;
       weeksEl.value = state.settings.criticalWeeksLeft;
       oppEl.value = state.settings.opportunityMinTotalSold;
+      maxBalEl.value = state.settings.maxBalance;
     }
     syncInputs();
 
@@ -206,13 +209,15 @@
       var hot = Number(hotEl.value); if (!isFinite(hot) || hot < 0) hot = DEFAULT_SETTINGS.hotSoldMin;
       var weeks = Number(weeksEl.value); if (!isFinite(weeks) || weeks < 0) weeks = DEFAULT_SETTINGS.criticalWeeksLeft;
       var opp = Number(oppEl.value); if (!isFinite(opp) || opp < 0) opp = DEFAULT_SETTINGS.opportunityMinTotalSold;
-      state.settings = { hotSoldMin: hot, criticalWeeksLeft: weeks, opportunityMinTotalSold: opp };
+      var maxBal = Number(maxBalEl.value); if (!isFinite(maxBal) || maxBal < 0) maxBal = DEFAULT_SETTINGS.maxBalance;
+      state.settings = { hotSoldMin: hot, criticalWeeksLeft: weeks, opportunityMinTotalSold: opp, maxBalance: maxBal };
       renderDashboard();
       scheduleSave();
     }
     hotEl.addEventListener('change', onChange);
     weeksEl.addEventListener('change', onChange);
     oppEl.addEventListener('change', onChange);
+    maxBalEl.addEventListener('change', onChange);
 
     document.getElementById('btnSettingsReset').addEventListener('click', function () {
       state.settings = Object.assign({}, DEFAULT_SETTINGS);
@@ -379,6 +384,9 @@
       } else if (soldElsewhere >= settings.opportunityMinTotalSold && soldHere === 0 && balanceHere === 0) {
         status = 'opportunity';
         statusLabel = 'موديل ناجح — غير متوفر لديك';
+      } else if (balanceHere > settings.maxBalance) {
+        status = 'surplus';
+        statusLabel = 'فائض في المخزون';
       } else {
         status = 'ok';
         statusLabel = 'المخزون مناسب';
@@ -389,7 +397,7 @@
         weeksLeft: weeksLeft, status: status, statusLabel: statusLabel
       };
     }).sort(function (a, b) {
-      var order = { critical: 0, warning: 1, opportunity: 2, ok: 3, excluded: 4 };
+      var order = { critical: 0, warning: 1, opportunity: 2, surplus: 3, ok: 4, excluded: 5 };
       if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
       return (b.soldHere + b.soldElsewhere) - (a.soldHere + a.soldElsewhere);
     });
@@ -507,7 +515,7 @@
     hintEl.textContent = 'لكل صنف: كم بِيع في هذا الفرع، وكم بِيع إجمالًا في باقي الفروع، وهل يحتاج الفرع طلب توريد الآن بناءً على رصيده الحالي.';
 
     var data = computeBranchReportRows(selectedBranch, true);
-    var counts = { all: 0, critical: 0, warning: 0, opportunity: 0, ok: 0, excluded: 0 };
+    var counts = { all: 0, critical: 0, warning: 0, opportunity: 0, surplus: 0, ok: 0, excluded: 0 };
     data.forEach(function (d) { counts[d.status]++; if (d.status !== 'excluded') counts.all++; });
 
     var filters = [
@@ -515,6 +523,7 @@
       { key: 'critical', label: '🔴 لا يوجد رصيد (' + counts.critical + ')' },
       { key: 'warning', label: '🟡 رصيد منخفض (' + counts.warning + ')' },
       { key: 'opportunity', label: '🟢 فرصة جديدة (' + counts.opportunity + ')' },
+      { key: 'surplus', label: '🔵 فائض في المخزون (' + counts.surplus + ')' },
       { key: 'ok', label: 'مخزون مناسب (' + counts.ok + ')' },
       { key: 'excluded', label: '🚫 مستبعدة من التقرير (' + counts.excluded + ')' }
     ];
@@ -603,6 +612,13 @@
   // ---------------------------------------------------------------------
   document.getElementById('dateFrom').addEventListener('change', function (e) { state.dateFrom = e.target.value; scheduleSave(); renderKpis(selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch, true)); });
   document.getElementById('dateTo').addEventListener('change', function (e) { state.dateTo = e.target.value; scheduleSave(); renderKpis(selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch, true)); });
+
+  // Open the native calendar picker on a single click anywhere in the field,
+  // instead of requiring a precise click on the small calendar icon.
+  ['dateFrom', 'dateTo'].forEach(function (id) {
+    var el = document.getElementById(id);
+    el.addEventListener('click', function () { if (el.showPicker) { try { el.showPicker(); } catch (e) { /* ignore */ } } });
+  });
 
   // ---------------------------------------------------------------------
   // Add row / Reset
@@ -782,16 +798,12 @@
       '</tr>';
   }
 
-  function buildBranchHeaderFirstHtml(branch, kpis) {
+  function buildBranchHeaderFirstHtml(branch) {
     return '<div class="pdf-header-block">' +
       '<h1 class="pdf-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="pdf-sub pdf-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
-      '<div class="pdf-kpis">' +
-      '<div class="pdf-kpi"><div class="l">إجمالي مبيعات الفرع</div><div class="v">' + kpis.soldSum + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">إجمالي الرصيد الحالي</div><div class="v">' + kpis.balSum + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">أصناف تحتاج طلبًا فوريًا</div><div class="v">' + kpis.needOrder + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">عدد الأصناف</div><div class="v">' + kpis.total + '</div></div>' +
-      '</div></div>';
+      '<p class="pdf-sub" style="margin:0">مرتب تنازليًا حسب إجمالي المبيعات في كل الفروع</p>' +
+      '</div>';
   }
 
   function buildBranchHeaderRestHtml(branch) {
@@ -804,13 +816,12 @@
   // Measures real rendered row heights off-screen, then splits the report
   // into as many exact-A4 pages as needed without ever cutting a row.
   function paginateBranchReport(branch) {
-    var data = computeBranchReportRows(branch.code);
-    var soldSum = 0, balSum = 0, needOrder = 0;
-    data.forEach(function (d) {
-      soldSum += d.soldHere; balSum += d.balanceHere;
-      if (d.status === 'critical' || d.status === 'warning') needOrder++;
+    // Sorted by total quantity sold across all branches, descending — this
+    // is the printed report's order, independent of the on-screen table's
+    // urgency-first ordering.
+    var data = computeBranchReportRows(branch.code).slice().sort(function (a, b) {
+      return (b.soldHere + b.soldElsewhere) - (a.soldHere + a.soldElsewhere);
     });
-    var kpis = { soldSum: soldSum, balSum: balSum, needOrder: needOrder, total: data.length };
 
     var root = document.getElementById('pdfRoot');
     var pages;
@@ -821,7 +832,7 @@
       var measure = document.createElement('div');
       measure.className = 'pdf-page';
       measure.innerHTML =
-        '<div class="measure-first">' + buildBranchHeaderFirstHtml(branch, kpis) + '</div>' +
+        '<div class="measure-first">' + buildBranchHeaderFirstHtml(branch) + '</div>' +
         '<div class="measure-rest">' + buildBranchHeaderRestHtml(branch) + '</div>' +
         '<table class="pdf-table">' + pdfColgroupHtml() + pdfTableHeadHtml(branch.name) +
         '<tbody>' + data.map(pdfRowHtml).join('') + '</tbody></table>';
@@ -857,7 +868,7 @@
     var totalPages = pages.length;
     return pages.map(function (p, pageIdx) {
       var subset = data.slice(p.start, p.end);
-      var headerHtml = p.isFirst ? buildBranchHeaderFirstHtml(branch, kpis) : buildBranchHeaderRestHtml(branch);
+      var headerHtml = p.isFirst ? buildBranchHeaderFirstHtml(branch) : buildBranchHeaderRestHtml(branch);
       var bodyHtml = subset.length
         ? '<table class="pdf-table">' + pdfColgroupHtml() + pdfTableHeadHtml(branch.name) + '<tbody>' + subset.map(pdfRowHtml).join('') + '</tbody></table>'
         : '<p class="pdf-sub">لا توجد أصناف في هذا التقرير (تم استبعاد جميع الأصناف).</p>';
@@ -867,10 +878,7 @@
   }
 
   function buildCoverPageHtml(branchesIncluded) {
-    var rr = reportableRows();
-    var totalSold = 0, totalBalance = 0;
-    rr.forEach(function (r) { totalSold += r.TotalQtySold; totalBalance += r.TotalBalance; });
-
+    var totalSold = 0, totalBalance = 0, totalNeedOrder = 0;
     var branchRowsHtml = branchesIncluded.map(function (b) {
       var sold = 0, bal = 0, needOrder = 0;
       var data = computeBranchReportRows(b.code);
@@ -878,21 +886,18 @@
         sold += d.soldHere; bal += d.balanceHere;
         if (d.status === 'critical' || d.status === 'warning') needOrder++;
       });
+      totalSold += sold; totalBalance += bal; totalNeedOrder += needOrder;
       return '<tr><td>' + b.code + ' - ' + b.name + '</td><td class="num">' + sold + '</td><td class="num">' + bal + '</td><td class="num">' + needOrder + '</td></tr>';
     }).join('');
+    branchRowsHtml += '<tr style="font-weight:700"><td>الإجمالي</td><td class="num">' + totalSold + '</td><td class="num">' + totalBalance + '</td><td class="num">' + totalNeedOrder + '</td></tr>';
 
     return '<div class="pdf-page pdf-page-fixed">' +
       '<h1 class="pdf-title">تقرير المبيعات الأسبوعية — جميع الفروع</h1>' +
       '<p class="pdf-sub pdf-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
-      '<div class="pdf-kpis">' +
-      '<div class="pdf-kpi"><div class="l">إجمالي القطع المباعة</div><div class="v">' + totalSold + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">إجمالي الرصيد المتبقي</div><div class="v">' + totalBalance + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">عدد الأصناف بالتقرير</div><div class="v">' + rr.length + '</div></div>' +
-      '</div>' +
       '<table class="pdf-table"><colgroup><col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>' +
       '<thead><tr><th>الفرع</th><th class="num">مباع</th><th class="num">رصيد</th><th class="num">يحتاج طلبًا فوريًا</th></tr></thead>' +
       '<tbody>' + branchRowsHtml + '</tbody></table>' +
-      '<p class="pdf-footer">الصفحات التالية: تقرير تفصيلي مستقل لكل فرع</p>' +
+      '<p class="pdf-footer">الصفحات التالية: تقرير تفصيلي مستقل لكل فرع، مرتب تنازليًا حسب إجمالي المبيعات</p>' +
       '</div>';
   }
 

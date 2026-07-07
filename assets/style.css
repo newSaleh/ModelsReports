@@ -207,11 +207,14 @@ main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
   align-items: end; background: var(--page-plane); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px 14px; margin: 12px 0;
 }
+.settings-panel[hidden] { display: none; }
+.settings-intro { grid-column: 1 / -1; margin: 0 0 4px; font-size: 0.8rem; color: var(--text-secondary); }
 .settings-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.78rem; color: var(--text-secondary); }
 .settings-field input {
   border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px;
   background: var(--surface-2); color: var(--text-primary); font-family: var(--font); font-size: 0.85rem;
 }
+.settings-field small { color: var(--text-muted); font-size: 0.7rem; line-height: 1.4; }
 
 .alert-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .chip-filter {
@@ -226,6 +229,7 @@ main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .status-label.warning { color: var(--status-warning); } }
 :root[data-theme="dark"] .status-label.warning { color: var(--status-warning); }
 .status-label.opportunity { background: rgba(12,163,12,0.15); color: var(--status-good); }
+.status-label.surplus { background: rgba(42,120,214,0.15); color: var(--series-1); }
 .status-label.ok { background: rgba(137,135,129,0.15); color: var(--text-secondary); }
 .status-label.excluded { background: rgba(137,135,129,0.15); color: var(--text-muted); }
 .empty-state { color: var(--text-muted); font-size: 0.85rem; padding: 20px; text-align: center; }
@@ -255,6 +259,7 @@ table.branch-report-table td.num, table.branch-report-table th.num { text-align:
 table.branch-report-table tbody tr.row-critical td:first-child { border-inline-start: 3px solid var(--status-critical); }
 table.branch-report-table tbody tr.row-warning td:first-child { border-inline-start: 3px solid var(--status-warning); }
 table.branch-report-table tbody tr.row-opportunity td:first-child { border-inline-start: 3px solid var(--status-good); }
+table.branch-report-table tbody tr.row-surplus td:first-child { border-inline-start: 3px solid var(--series-1); }
 
 .table-wrap {
   overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius);
@@ -338,6 +343,7 @@ table#dataTable tfoot td {
 .pdf-page .pdf-status.critical { background: #fbe2e2; color: #a12727; }
 .pdf-page .pdf-status.warning { background: #fdedcf; color: #8a6100; }
 .pdf-page .pdf-status.opportunity { background: #d9f2d9; color: #0b6e0b; }
+.pdf-page .pdf-status.surplus { background: #dce8f8; color: #1c5cab; }
 .pdf-page .pdf-status.ok { background: #eeeeec; color: #52514e; }
 .pdf-page .pdf-kpis { display: flex; gap: 16px; margin-bottom: 16px; }
 .pdf-page .pdf-kpi { flex: 1; border: 1px solid #e1e0d9; border-radius: 8px; padding: 10px 14px; }

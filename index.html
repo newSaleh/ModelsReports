@@ -82,17 +82,26 @@
       </div>
 
       <div class="settings-panel" id="settingsPanel" hidden>
+        <p class="settings-intro">هذه الإعدادات تتحكم بمتى يُعتبر صنف "بحاجة لطلب" أو "به فائض مخزون" في تقرير الفرع. عدّلها لتناسب طبيعة عملك — تُحفظ تلقائيًا.</p>
         <div class="settings-field">
           <label for="setHotSoldMin">الحد الأدنى للمبيعات الأسبوعية ليُعتبر الصنف "يبيع جيدًا"</label>
           <input type="number" id="setHotSoldMin" min="0" step="1">
+          <small>مثال: لو كانت القيمة 5، فأي صنف باع 5 قطع أو أكثر هذا الأسبوع يُعتبر ناجحًا.</small>
         </div>
         <div class="settings-field">
-          <label for="setCriticalWeeks">أقل عدد أسابيع تغطية يُعتبر رصيدًا مناسبًا (أقل منه = يحتاج طلبًا)</label>
+          <label for="setCriticalWeeks">أقل عدد أسابيع يجب أن يغطّيها الرصيد الحالي</label>
           <input type="number" id="setCriticalWeeks" min="0" step="0.5">
+          <small>يُحسب بقسمة (الرصيد الحالي ÷ متوسط المبيعات الأسبوعية). لو كانت القيمة 1، فأي صنف يكفي رصيده لأقل من أسبوع واحد بمعدل بيعه الحالي يُعتبر بحاجة لطلب فوري.</small>
         </div>
         <div class="settings-field">
-          <label for="setOpportunityMin">الحد الأدنى لمبيعات باقي الفروع ليُعتبر الموديل ناجحًا يستحق التوسع</label>
+          <label for="setOpportunityMin">الحد الأدنى لمبيعات باقي الفروع ليُعتبر الموديل ناجحًا</label>
           <input type="number" id="setOpportunityMin" min="0" step="1">
+          <small>يُستخدم لاقتراح تزويد الفرع بموديل ناجح في الفروع الأخرى وغير متوفر لديه.</small>
+        </div>
+        <div class="settings-field">
+          <label for="setMaxBalance">الحد الأعلى للرصيد الحالي في الفرع (فوقه = فائض مخزون)</label>
+          <input type="number" id="setMaxBalance" min="0" step="1">
+          <small>أي صنف رصيده الحالي في هذا الفرع أعلى من هذا الرقم يُصنَّف "فائض في المخزون"، بغض النظر عن مبيعاته.</small>
         </div>
         <button id="btnSettingsReset" class="btn btn-ghost">استعادة الإعدادات الافتراضية</button>
       </div>
