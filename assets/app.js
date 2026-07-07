@@ -527,15 +527,20 @@
       { key: 'ok', label: 'مخزون مناسب (' + counts.ok + ')' },
       { key: 'excluded', label: '🚫 مستبعدة من التقرير (' + counts.excluded + ')' }
     ];
-    filtersEl.innerHTML = filters.map(function (f) {
+    var shown = statusFilter === 'all' ? data.filter(function (d) { return d.status !== 'excluded'; }) : data.filter(function (d) { return d.status === statusFilter; });
+
+    var chipsHtml = filters.map(function (f) {
       return '<button class="chip-filter' + (statusFilter === f.key ? ' active' : '') + '" data-filter="' + f.key + '">' + f.label + '</button>';
     }).join('');
+    if (statusFilter !== 'all' && statusFilter !== 'excluded' && shown.length) {
+      chipsHtml += '<button class="btn btn-danger-ghost bulk-exclude-btn" id="btnBulkExclude">🚫 استبعاد كل هذه الأصناف من التقرير (' + shown.length + ')</button>';
+    }
+    filtersEl.innerHTML = chipsHtml;
 
     table.querySelector('thead').innerHTML = '<tr>' +
       '<th>الصنف / الموديل</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th>' +
       '<th class="num">مبيعات باقي الفروع</th><th class="num">الرصيد الحالي</th><th>الحالة</th><th>إجراء</th></tr>';
 
-    var shown = statusFilter === 'all' ? data.filter(function (d) { return d.status !== 'excluded'; }) : data.filter(function (d) { return d.status === statusFilter; });
     var tbody = table.querySelector('tbody');
     if (!shown.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="empty-state">لا توجد أصناف ضمن هذا التصنيف</td></tr>';
@@ -565,6 +570,18 @@
     if (e.target.matches('.chip-filter')) {
       statusFilter = e.target.getAttribute('data-filter');
       renderBranchReportTable();
+      return;
+    }
+    if (e.target.matches('.bulk-exclude-btn')) {
+      var matching = computeBranchReportRows(selectedBranch, true).filter(function (d) { return d.status === statusFilter; });
+      if (!matching.length) return;
+      if (confirm('سيتم استبعاد ' + matching.length + ' صنف من التقرير دفعة واحدة. يمكنك التراجع لاحقًا لكل صنف على حدة. متابعة؟')) {
+        matching.forEach(function (d) { d.row.excludedFromReport = true; });
+        statusFilter = 'all';
+        renderDashboard();
+        renderTableBody();
+        scheduleSave();
+      }
       return;
     }
     if (e.target.matches('.row-action-btn')) {
@@ -752,10 +769,10 @@
     return pdfFontReady;
   }
 
-  // A4 landscape at 96 CSS px/inch (297mm x 210mm).
-  var PAGE_W = 1122;
-  var PAGE_H = 794;
-  var PAGE_PAD_V = 34;
+  // A4 portrait at 96 CSS px/inch (210mm x 297mm).
+  var PAGE_W = 794;
+  var PAGE_H = 1122;
+  var PAGE_PAD_V = 32;
   var HEADER_GAP = 14;   // safety buffer for margin-collapse under the header block
   var FOOTER_CLEARANCE = 26; // reserves room for the in-flow page-number line
   var PAGE_SAFETY = 15;
@@ -774,7 +791,7 @@
 
   function pdfColgroupHtml() {
     return '<colgroup>' +
-      '<col style="width:32%"><col style="width:10%"><col style="width:13%"><col style="width:15%"><col style="width:12%"><col style="width:18%">' +
+      '<col style="width:27%"><col style="width:11%"><col style="width:13%"><col style="width:15%"><col style="width:12%"><col style="width:22%">' +
       '</colgroup>';
   }
 
@@ -940,7 +957,7 @@
       });
 
       var jsPDF = window.jspdf.jsPDF;
-      var doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+      var doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
       var pageWpt = doc.internal.pageSize.getWidth();
       var pageHpt = doc.internal.pageSize.getHeight();
 
