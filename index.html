@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>تقرير المبيعات الأسبوعية — جميع الفروع</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-top">
+    <div class="brand">
+      <h1>تقرير المبيعات الأسبوعية</h1>
+      <p class="subtitle">جميع الفروع — تحليل المبيعات والمخزون</p>
+    </div>
+    <div class="date-range">
+      <label>من
+        <input type="date" id="dateFrom">
+      </label>
+      <label>إلى
+        <input type="date" id="dateTo">
+      </label>
+    </div>
+  </div>
+  <div class="branch-legend" id="branchLegend"></div>
+</header>
+
+<nav class="toolbar">
+  <div class="toolbar-group">
+    <button id="btnImport" class="btn btn-secondary" title="استيراد ملف Excel أسبوعي">
+      <span class="icon">📂</span> استيراد Excel
+    </button>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
+    <button id="btnTemplate" class="btn btn-ghost" title="تنزيل نموذج فارغ بنفس الأعمدة">نموذج فارغ</button>
+    <button id="btnAddRow" class="btn btn-ghost">+ إضافة صنف</button>
+  </div>
+  <div class="toolbar-group toolbar-search">
+    <input type="search" id="searchBox" placeholder="بحث بالمورد / الفئة / كود الصنف / الموديل...">
+  </div>
+  <div class="toolbar-group">
+    <label class="branch-select-label">تقرير فرع:
+      <select id="branchSelect"></select>
+    </label>
+    <button id="btnExportExcel" class="btn btn-primary"><span class="icon">📊</span> تصدير Excel</button>
+    <button id="btnExportPdf" class="btn btn-primary"><span class="icon">📄</span> تصدير PDF</button>
+    <button id="btnReset" class="btn btn-danger-ghost" title="مسح كل البيانات والبدء من جديد">مسح الكل</button>
+  </div>
+</nav>
+
+<div class="save-indicator" id="saveIndicator">تم الحفظ ✓</div>
+<div class="save-indicator busy-indicator" id="busyIndicator">جارٍ إنشاء PDF...</div>
+
+<main>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="dashboard">لوحة التحليل وتقرير الفرع</button>
+    <button class="tab-btn" data-tab="table">جدول البيانات (تعديل)</button>
+  </div>
+
+  <section id="tab-dashboard" class="tab-panel active">
+    <div class="kpi-row" id="kpiRow"></div>
+
+    <div class="panel-grid">
+      <div class="panel">
+        <h2 id="topModelsTitle">أفضل 10 موديلات مبيعًا</h2>
+        <div id="chartTopModels" class="chart-area"></div>
+      </div>
+      <div class="panel">
+        <h2>إجمالي المبيعات حسب الفرع</h2>
+        <div id="chartByBranch" class="chart-area"></div>
+      </div>
+    </div>
+
+    <div class="panel alerts-panel">
+      <h2 id="branchReportTitle">تقرير الفرع التفصيلي</h2>
+      <p class="panel-hint" id="branchReportHint"></p>
+      <div class="alert-filters" id="alertFilters"></div>
+      <div class="branch-report-wrap">
+        <table id="branchReportTable" class="branch-report-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-table" class="tab-panel">
+    <div class="table-wrap">
+      <table id="dataTable">
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+        <tfoot id="tableFoot"></tfoot>
+      </table>
+    </div>
+    <p class="table-hint">انقر على أي خلية رقمية للتعديل مباشرة. يتم حفظ التغييرات تلقائيًا وتحديث التحليل فورًا.</p>
+  </section>
+</main>
+
+<footer class="app-footer">
+  <span id="rowCount"></span>
+  <span>البيانات محفوظة في هذا المتصفح فقط (localStorage)</span>
+</footer>
+
+<div id="pdfRoot" aria-hidden="true"></div>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/html2canvas.min.js"></script>
+<script src="vendor/noto-naskh-arabic-font.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
