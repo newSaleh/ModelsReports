@@ -203,18 +203,28 @@ main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
 .panel-head-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 
 .settings-panel {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;
-  align-items: end; background: var(--page-plane); border: 1px solid var(--border);
+  background: var(--page-plane); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px 14px; margin: 12px 0;
 }
 .settings-panel[hidden] { display: none; }
-.settings-intro { grid-column: 1 / -1; margin: 0 0 4px; font-size: 0.8rem; color: var(--text-secondary); }
-.settings-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.78rem; color: var(--text-secondary); }
+.settings-intro { margin: 0 0 10px; font-size: 0.8rem; color: var(--text-secondary); }
+/* Grid with explicit rows (label / input / helper) so every input lines up
+   in the same row regardless of how many lines its label wraps to. */
+.settings-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-rows: auto auto 1fr;
+  grid-auto-flow: column;
+  column-gap: 14px; row-gap: 6px;
+}
+.settings-field { display: contents; }
+.settings-field label { grid-row: 1; align-self: end; font-size: 0.78rem; color: var(--text-secondary); }
 .settings-field input {
+  grid-row: 2;
   border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px;
   background: var(--surface-2); color: var(--text-primary); font-family: var(--font); font-size: 0.85rem;
 }
-.settings-field small { color: var(--text-muted); font-size: 0.7rem; line-height: 1.4; }
+.settings-field small { grid-row: 3; align-self: start; color: var(--text-muted); font-size: 0.7rem; line-height: 1.4; }
 
 .alert-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .chip-filter {
@@ -329,33 +339,30 @@ table#dataTable tfoot td {
   background: #ffffff;
   color: #111111;
   font-family: 'NotoNaskhArabicPdf', 'system-ui', sans-serif;
-  padding: 32px 28px;
+  padding: 26px 24px;
   direction: rtl;
 }
 .pdf-page * { box-sizing: border-box; }
-.pdf-page h1.pdf-title { font-size: 20px; margin: 0 0 6px; }
-.pdf-page p.pdf-sub { font-size: 12px; color: #444; margin: 0 0 4px; }
-.pdf-page .pdf-meta { margin-bottom: 14px; }
-.pdf-page table.pdf-table { width: 100%; border-collapse: collapse; font-size: 11.5px; table-layout: fixed; }
+.pdf-page h1.pdf-title { font-size: 18px; margin: 0 0 5px; }
+.pdf-page p.pdf-sub { font-size: 11px; color: #444; margin: 0 0 3px; }
+.pdf-page .pdf-meta { margin-bottom: 10px; }
+.pdf-page table.pdf-table { width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed; }
 .pdf-page table.pdf-table th {
-  background: #2a78d6; color: #fff; text-align: right; padding: 7px 8px; font-size: 11.5px;
+  background: #2a78d6; color: #fff; text-align: right; padding: 5px 7px; font-size: 10px;
 }
 .pdf-page table.pdf-table td {
-  border-bottom: 1px solid #e1e0d9; padding: 6px 8px; text-align: right;
-  word-wrap: break-word; overflow-wrap: break-word; vertical-align: top;
+  border-bottom: 1px solid #e1e0d9; padding: 4px 7px; text-align: right;
+  word-wrap: break-word; overflow-wrap: break-word; vertical-align: middle; line-height: 1.5;
 }
 .pdf-page table.pdf-table td.num, .pdf-page table.pdf-table th.num { text-align: center; }
 .pdf-page table.pdf-table tr:nth-child(even) td { background: #f7f7f5; }
-.pdf-page .pdf-status { font-size: 10.5px; padding: 2px 6px; border-radius: 999px; display: inline-block; white-space: normal; line-height: 1.35; }
+.pdf-page .pdf-supplier-inline { color: #777; font-size: 8.5px; }
+.pdf-page .pdf-status { font-size: 9px; padding: 2px 5px; border-radius: 999px; display: inline-block; white-space: normal; line-height: 1.35; }
 .pdf-page .pdf-status.critical { background: #fbe2e2; color: #a12727; }
 .pdf-page .pdf-status.warning { background: #fdedcf; color: #8a6100; }
 .pdf-page .pdf-status.opportunity { background: #d9f2d9; color: #0b6e0b; }
 .pdf-page .pdf-status.surplus { background: #dce8f8; color: #1c5cab; }
 .pdf-page .pdf-status.ok { background: #eeeeec; color: #52514e; }
-.pdf-page .pdf-kpis { display: flex; gap: 16px; margin-bottom: 16px; }
-.pdf-page .pdf-kpi { flex: 1; border: 1px solid #e1e0d9; border-radius: 8px; padding: 10px 14px; }
-.pdf-page .pdf-kpi .l { font-size: 11.5px; color: #666; margin-bottom: 4px; }
-.pdf-page .pdf-kpi .v { font-size: 20px; font-weight: 700; }
 .pdf-page .pdf-footer { margin-top: 10px; font-size: 11px; color: #888; text-align: center; }
 .pdf-page.pdf-page-fixed { height: 1122px; overflow: hidden; position: relative; }
 .pdf-page .pdf-header-block { margin-bottom: 10px; }

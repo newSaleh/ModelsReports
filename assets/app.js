@@ -535,6 +535,9 @@
     if (statusFilter !== 'all' && statusFilter !== 'excluded' && shown.length) {
       chipsHtml += '<button class="btn btn-danger-ghost bulk-exclude-btn" id="btnBulkExclude">🚫 استبعاد كل هذه الأصناف من التقرير (' + shown.length + ')</button>';
     }
+    if (statusFilter === 'excluded' && shown.length) {
+      chipsHtml += '<button class="btn btn-ghost bulk-restore-btn" id="btnBulkRestore">↩️ استعادة كل الأصناف المستبعدة (' + shown.length + ')</button>';
+    }
     filtersEl.innerHTML = chipsHtml;
 
     table.querySelector('thead').innerHTML = '<tr>' +
@@ -582,6 +585,16 @@
         renderTableBody();
         scheduleSave();
       }
+      return;
+    }
+    if (e.target.matches('.bulk-restore-btn')) {
+      var excludedRows = computeBranchReportRows(selectedBranch, true).filter(function (d) { return d.status === 'excluded'; });
+      if (!excludedRows.length) return;
+      excludedRows.forEach(function (d) { d.row.excludedFromReport = false; });
+      statusFilter = 'all';
+      renderDashboard();
+      renderTableBody();
+      scheduleSave();
       return;
     }
     if (e.target.matches('.row-action-btn')) {
@@ -772,7 +785,7 @@
   // A4 portrait at 96 CSS px/inch (210mm x 297mm).
   var PAGE_W = 794;
   var PAGE_H = 1122;
-  var PAGE_PAD_V = 32;
+  var PAGE_PAD_V = 26;
   var HEADER_GAP = 14;   // safety buffer for margin-collapse under the header block
   var FOOTER_CLEARANCE = 26; // reserves room for the in-flow page-number line
   var PAGE_SAFETY = 15;
@@ -786,7 +799,7 @@
   function pdfSupplierLine(r) {
     if (!r.SupplierName) return '';
     var text = r.SupplierName + (r.SupplierCode ? ' (' + r.SupplierCode + ')' : '');
-    return '<div style="color:#777;font-size:11px;margin-top:2px">' + escapeAttr(text) + '</div>';
+    return ' <span class="pdf-supplier-inline">— ' + escapeAttr(text) + '</span>';
   }
 
   function pdfColgroupHtml() {
@@ -920,8 +933,8 @@
   }
 
   function captureElementToImage(el) {
-    return html2canvas(el, { scale: 2, backgroundColor: '#ffffff', useCORS: true }).then(function (canvas) {
-      return { dataUrl: canvas.toDataURL('image/jpeg', 0.92) };
+    return html2canvas(el, { scale: 2.5, backgroundColor: '#ffffff', useCORS: true }).then(function (canvas) {
+      return { dataUrl: canvas.toDataURL('image/png') };
     });
   }
 
@@ -974,7 +987,7 @@
           return captureElementToImage(pageEl).then(function (img) {
             root.removeChild(pageEl);
             if (i > 0) doc.addPage();
-            doc.addImage(img.dataUrl, 'JPEG', 0, 0, pageWpt, pageHpt);
+            doc.addImage(img.dataUrl, 'PNG', 0, 0, pageWpt, pageHpt);
           });
         });
       });
