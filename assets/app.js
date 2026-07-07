@@ -21,11 +21,15 @@
   ];
 
   var STORAGE_KEY = 'modelsReport_v2';
+  var THEME_KEY = 'modelsReportTheme';
 
-  // Thresholds for the branch-strength assessment
-  var HOT_SOLD_MIN = 5;          // minimum weekly sales in a branch to call it "selling well"
-  var CRITICAL_WEEKS_LEFT = 1;   // less than this many weeks of cover -> needs a reorder
-  var OPPORTUNITY_MIN_TOTAL_SOLD = 15; // sold this well elsewhere to justify stocking a new branch
+  // Default thresholds for the branch-strength assessment. The user can
+  // override these live from the settings panel (⚙️ إعدادات التقييم).
+  var DEFAULT_SETTINGS = {
+    hotSoldMin: 5,             // minimum weekly sales in a branch to call it "selling well"
+    criticalWeeksLeft: 1,      // less than this many weeks of cover -> needs a reorder
+    opportunityMinTotalSold: 15 // sold this well elsewhere to justify stocking a new branch
+  };
 
   function branchField(code, suffix) { return code + suffix; }
   function branchByCode(code) {
@@ -39,7 +43,8 @@
   var state = {
     rows: [],
     dateFrom: '',
-    dateTo: ''
+    dateTo: '',
+    settings: Object.assign({}, DEFAULT_SETTINGS)
   };
 
   var searchTerm = '';
@@ -56,6 +61,7 @@
     });
     r.TotalQtySold = 0;
     r.TotalBalance = 0;
+    r.excludedFromReport = false;
     return r;
   }
 
@@ -70,6 +76,10 @@
   }
 
   function recalcAll() { state.rows.forEach(recalcRow); }
+
+  function reportableRows() {
+    return state.rows.filter(function (r) { return !r.excludedFromReport; });
+  }
 
   // ---------------------------------------------------------------------
   // Persistence
@@ -101,6 +111,8 @@
         var parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.rows)) {
           state = parsed;
+          state.settings = Object.assign({}, DEFAULT_SETTINGS, state.settings || {});
+          state.rows.forEach(function (r) { if (r.excludedFromReport == null) r.excludedFromReport = false; });
           return;
         }
       } catch (e) { console.warn('bad saved state', e); }
@@ -110,6 +122,37 @@
     state.rows = [];
     state.dateFrom = '';
     state.dateTo = '';
+    state.settings = Object.assign({}, DEFAULT_SETTINGS);
+  }
+
+  // ---------------------------------------------------------------------
+  // Day/night theme toggle
+  // ---------------------------------------------------------------------
+  function getCurrentTheme() {
+    var attr = document.documentElement.getAttribute('data-theme');
+    if (attr) return attr;
+    return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+
+  function renderThemeButton() {
+    var btn = document.getElementById('btnTheme');
+    btn.textContent = getCurrentTheme() === 'dark' ? '☀️ الوضع النهاري' : '🌙 الوضع الليلي';
+  }
+
+  function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch (e) { /* ignore */ }
+    renderThemeButton();
+  }
+
+  function initTheme() {
+    var saved = null;
+    try { saved = localStorage.getItem(THEME_KEY); } catch (e) { /* ignore */ }
+    if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved);
+    renderThemeButton();
+    document.getElementById('btnTheme').addEventListener('click', function () {
+      setTheme(getCurrentTheme() === 'dark' ? 'light' : 'dark');
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -135,6 +178,47 @@
       selectedBranch = el.value;
       statusFilter = 'all';
       renderDashboard();
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Settings panel (user-adjustable "what counts as adequate stock")
+  // ---------------------------------------------------------------------
+  function initSettingsPanel() {
+    var panel = document.getElementById('settingsPanel');
+    var toggleBtn = document.getElementById('btnSettingsToggle');
+    var hotEl = document.getElementById('setHotSoldMin');
+    var weeksEl = document.getElementById('setCriticalWeeks');
+    var oppEl = document.getElementById('setOpportunityMin');
+
+    function syncInputs() {
+      hotEl.value = state.settings.hotSoldMin;
+      weeksEl.value = state.settings.criticalWeeksLeft;
+      oppEl.value = state.settings.opportunityMinTotalSold;
+    }
+    syncInputs();
+
+    toggleBtn.addEventListener('click', function () {
+      panel.hidden = !panel.hidden;
+    });
+
+    function onChange() {
+      var hot = Number(hotEl.value); if (!isFinite(hot) || hot < 0) hot = DEFAULT_SETTINGS.hotSoldMin;
+      var weeks = Number(weeksEl.value); if (!isFinite(weeks) || weeks < 0) weeks = DEFAULT_SETTINGS.criticalWeeksLeft;
+      var opp = Number(oppEl.value); if (!isFinite(opp) || opp < 0) opp = DEFAULT_SETTINGS.opportunityMinTotalSold;
+      state.settings = { hotSoldMin: hot, criticalWeeksLeft: weeks, opportunityMinTotalSold: opp };
+      renderDashboard();
+      scheduleSave();
+    }
+    hotEl.addEventListener('change', onChange);
+    weeksEl.addEventListener('change', onChange);
+    oppEl.addEventListener('change', onChange);
+
+    document.getElementById('btnSettingsReset').addEventListener('click', function () {
+      state.settings = Object.assign({}, DEFAULT_SETTINGS);
+      syncInputs();
+      renderDashboard();
+      scheduleSave();
     });
   }
 
@@ -171,7 +255,7 @@
     var html = '';
     state.rows.forEach(function (r, idx) {
       if (!rowMatchesSearch(r)) return;
-      html += '<tr data-idx="' + idx + '">';
+      html += '<tr data-idx="' + idx + '"' + (r.excludedFromReport ? ' class="row-excluded"' : '') + '>';
       html += '<td>' + (idx + 1) + '</td>';
       TEXT_FIELDS.forEach(function (f) {
         html += '<td><input class="text-cell" data-field="' + f.key + '" value="' + escapeAttr(r[f.key]) + '"></td>';
@@ -270,16 +354,21 @@
   // own sales vs. its own stock, using how the model performs elsewhere
   // only as evidence that it is worth reordering)
   // ---------------------------------------------------------------------
-  function computeBranchReportRows(branchCode) {
-    return state.rows.map(function (r) {
+  function computeBranchReportRows(branchCode, includeExcluded) {
+    var rows = includeExcluded ? state.rows : reportableRows();
+    var settings = state.settings;
+    return rows.map(function (r) {
       var soldHere = Number(r[branchField(branchCode, 'SoldQty')]) || 0;
       var balanceHere = Number(r[branchField(branchCode, 'Balance')]) || 0;
       var soldElsewhere = (r.TotalQtySold || 0) - soldHere;
       var weeksLeft = soldHere > 0 ? balanceHere / soldHere : (balanceHere > 0 ? Infinity : 0);
-      var sellingWell = soldHere >= HOT_SOLD_MIN || soldElsewhere >= OPPORTUNITY_MIN_TOTAL_SOLD;
+      var sellingWell = soldHere >= settings.hotSoldMin || soldElsewhere >= settings.opportunityMinTotalSold;
 
       var status, statusLabel;
-      if (sellingWell && weeksLeft < CRITICAL_WEEKS_LEFT) {
+      if (r.excludedFromReport) {
+        status = 'excluded';
+        statusLabel = 'مستبعد من التقرير';
+      } else if (sellingWell && weeksLeft < settings.criticalWeeksLeft) {
         if (balanceHere === 0) {
           status = 'critical';
           statusLabel = 'لا يوجد رصيد — اطلب الآن';
@@ -287,7 +376,7 @@
           status = 'warning';
           statusLabel = 'رصيد منخفض — اطلب الآن';
         }
-      } else if (soldElsewhere >= OPPORTUNITY_MIN_TOTAL_SOLD && soldHere === 0 && balanceHere === 0) {
+      } else if (soldElsewhere >= settings.opportunityMinTotalSold && soldHere === 0 && balanceHere === 0) {
         status = 'opportunity';
         statusLabel = 'موديل ناجح — غير متوفر لديك';
       } else {
@@ -300,7 +389,7 @@
         weeksLeft: weeksLeft, status: status, statusLabel: statusLabel
       };
     }).sort(function (a, b) {
-      var order = { critical: 0, warning: 1, opportunity: 2, ok: 3 };
+      var order = { critical: 0, warning: 1, opportunity: 2, ok: 3, excluded: 4 };
       if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
       return (b.soldHere + b.soldElsewhere) - (a.soldHere + a.soldElsewhere);
     });
@@ -313,15 +402,16 @@
     var tiles;
     if (selectedBranch === 'all') {
       var totalSold = 0, totalBalance = 0;
-      state.rows.forEach(function (r) { totalSold += r.TotalQtySold; totalBalance += r.TotalBalance; });
-      var top = state.rows.slice().sort(function (a, b) { return b.TotalQtySold - a.TotalQtySold; })[0];
+      var rr = reportableRows();
+      rr.forEach(function (r) { totalSold += r.TotalQtySold; totalBalance += r.TotalBalance; });
+      var top = rr.slice().sort(function (a, b) { return b.TotalQtySold - a.TotalQtySold; })[0];
       var needsOrderAll = 0;
       BRANCHES.forEach(function (b) {
         needsOrderAll += computeBranchReportRows(b.code).filter(function (d) { return d.status === 'critical' || d.status === 'warning'; }).length;
       });
       tiles = [
         { label: 'إجمالي القطع المباعة (كل الفروع)', value: totalSold.toLocaleString('en-US'), sub: (state.dateFrom || '') + ' → ' + (state.dateTo || '') },
-        { label: 'إجمالي الرصيد المتبقي', value: totalBalance.toLocaleString('en-US'), sub: state.rows.length + ' صنف' },
+        { label: 'إجمالي الرصيد المتبقي', value: totalBalance.toLocaleString('en-US'), sub: rr.length + ' صنف بالتقرير' },
         { label: 'أصناف تحتاج طلبًا فوريًا (كل الفروع)', value: needsOrderAll, sub: 'إجمالي عبر جميع الفروع', critical: needsOrderAll > 0 },
         { label: 'الموديل الأفضل مبيعًا', value: top ? top.ModelCode : '—', sub: top ? (top.TotalQtySold + ' قطعة · ' + (top.StockGroupName || '')) : '' }
       ];
@@ -333,7 +423,7 @@
       var topHere = branchData.slice().sort(function (x, y) { return y.soldHere - x.soldHere; })[0];
       tiles = [
         { label: 'مبيعات فرع ' + b.name, value: soldSum.toLocaleString('en-US'), sub: (state.dateFrom || '') + ' → ' + (state.dateTo || '') },
-        { label: 'الرصيد الحالي بالفرع', value: balSum.toLocaleString('en-US'), sub: state.rows.length + ' صنف' },
+        { label: 'الرصيد الحالي بالفرع', value: balSum.toLocaleString('en-US'), sub: branchData.length + ' صنف بالتقرير' },
         { label: 'أصناف تحتاج طلبًا فوريًا', value: needOrder, sub: 'في فرع ' + b.name, critical: needOrder > 0 },
         { label: 'الأفضل مبيعًا في هذا الفرع', value: (topHere && topHere.soldHere > 0) ? topHere.row.ModelCode : '—', sub: (topHere && topHere.soldHere > 0) ? (topHere.soldHere + ' قطعة · ' + (topHere.row.StockGroupName || '')) : '' }
       ];
@@ -359,7 +449,7 @@
     titleEl.textContent = useAll ? 'أفضل 10 موديلات مبيعًا (كل الفروع)' : 'أفضل 10 موديلات مبيعًا — فرع ' + b.name;
 
     var sortKey = useAll ? 'TotalQtySold' : branchField(selectedBranch, 'SoldQty');
-    var top = state.rows.slice().sort(function (x, y) { return (y[sortKey] || 0) - (x[sortKey] || 0); }).slice(0, 10);
+    var top = reportableRows().slice().sort(function (x, y) { return (y[sortKey] || 0) - (x[sortKey] || 0); }).slice(0, 10);
     var max = top.length ? (top[0][sortKey] || 0) : 0;
     var html = top.map(function (r) {
       return barRowHtml(r.ModelCode + ' — ' + (r.StockGroupName || ''), r[sortKey] || 0, max, 'var(--series-1)');
@@ -368,9 +458,10 @@
   }
 
   function renderByBranchChart() {
+    var rr = reportableRows();
     var totals = BRANCHES.map(function (b) {
       var sum = 0;
-      state.rows.forEach(function (r) { sum += Number(r[branchField(b.code, 'SoldQty')]) || 0; });
+      rr.forEach(function (r) { sum += Number(r[branchField(b.code, 'SoldQty')]) || 0; });
       return { branch: b, total: sum };
     });
     var max = Math.max.apply(null, totals.map(function (t) { return t.total; }).concat([0]));
@@ -388,6 +479,12 @@
   // ---------------------------------------------------------------------
   function statusBadgeHtml(status, label) {
     return '<span class="status-label ' + status + '">' + escapeAttr(label) + '</span>';
+  }
+
+  function supplierLineHtml(r) {
+    if (!r.SupplierName) return '';
+    var text = r.SupplierName + (r.SupplierCode ? ' (' + r.SupplierCode + ')' : '');
+    return '<br><span style="color:var(--text-muted);font-size:0.75rem">' + escapeAttr(text) + '</span>';
   }
 
   function renderBranchReportTable() {
@@ -409,16 +506,17 @@
     titleEl.textContent = 'تقرير فرع ' + b.name + ' (' + b.code + ') — كل صنف على حدة';
     hintEl.textContent = 'لكل صنف: كم بِيع في هذا الفرع، وكم بِيع إجمالًا في باقي الفروع، وهل يحتاج الفرع طلب توريد الآن بناءً على رصيده الحالي.';
 
-    var data = computeBranchReportRows(selectedBranch);
-    var counts = { all: data.length, critical: 0, warning: 0, opportunity: 0, ok: 0 };
-    data.forEach(function (d) { counts[d.status]++; });
+    var data = computeBranchReportRows(selectedBranch, true);
+    var counts = { all: 0, critical: 0, warning: 0, opportunity: 0, ok: 0, excluded: 0 };
+    data.forEach(function (d) { counts[d.status]++; if (d.status !== 'excluded') counts.all++; });
 
     var filters = [
       { key: 'all', label: 'الكل (' + counts.all + ')' },
       { key: 'critical', label: '🔴 لا يوجد رصيد (' + counts.critical + ')' },
       { key: 'warning', label: '🟡 رصيد منخفض (' + counts.warning + ')' },
       { key: 'opportunity', label: '🟢 فرصة جديدة (' + counts.opportunity + ')' },
-      { key: 'ok', label: 'مخزون مناسب (' + counts.ok + ')' }
+      { key: 'ok', label: 'مخزون مناسب (' + counts.ok + ')' },
+      { key: 'excluded', label: '🚫 مستبعدة من التقرير (' + counts.excluded + ')' }
     ];
     filtersEl.innerHTML = filters.map(function (f) {
       return '<button class="chip-filter' + (statusFilter === f.key ? ' active' : '') + '" data-filter="' + f.key + '">' + f.label + '</button>';
@@ -426,25 +524,29 @@
 
     table.querySelector('thead').innerHTML = '<tr>' +
       '<th>الصنف / الموديل</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th>' +
-      '<th class="num">مبيعات باقي الفروع</th><th class="num">الرصيد الحالي</th><th>الحالة</th></tr>';
+      '<th class="num">مبيعات باقي الفروع</th><th class="num">الرصيد الحالي</th><th>الحالة</th><th>إجراء</th></tr>';
 
-    var shown = statusFilter === 'all' ? data : data.filter(function (d) { return d.status === statusFilter; });
+    var shown = statusFilter === 'all' ? data.filter(function (d) { return d.status !== 'excluded'; }) : data.filter(function (d) { return d.status === statusFilter; });
     var tbody = table.querySelector('tbody');
     if (!shown.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">لا توجد أصناف ضمن هذا التصنيف</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">لا توجد أصناف ضمن هذا التصنيف</td></tr>';
     } else {
       tbody.innerHTML = shown.map(function (d) {
         var r = d.row;
+        var ridx = state.rows.indexOf(r);
         var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
-        var supplier = r.SupplierName ? '<br><span style="color:var(--text-muted);font-size:0.75rem">' + escapeAttr(r.SupplierName) + '</span>' : '';
         var price = (Number(r.UnitPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        return '<tr class="row-' + d.status + '">' +
-          '<td>' + desc + supplier + '</td>' +
+        var actionBtn = d.status === 'excluded'
+          ? '<button class="row-action-btn restore" data-action="restore" data-ridx="' + ridx + '">استعادة</button>'
+          : '<button class="row-action-btn" data-action="exclude" data-ridx="' + ridx + '">استبعاد</button>';
+        return '<tr class="row-' + d.status + (d.status === 'excluded' ? ' excluded-row' : '') + '">' +
+          '<td>' + desc + supplierLineHtml(r) + '</td>' +
           '<td class="num">' + price + '</td>' +
           '<td class="num">' + d.soldHere + '</td>' +
           '<td class="num">' + d.soldElsewhere + '</td>' +
           '<td class="num">' + d.balanceHere + '</td>' +
           '<td>' + statusBadgeHtml(d.status, d.statusLabel) + '</td>' +
+          '<td>' + actionBtn + '</td>' +
           '</tr>';
       }).join('');
     }
@@ -454,11 +556,22 @@
     if (e.target.matches('.chip-filter')) {
       statusFilter = e.target.getAttribute('data-filter');
       renderBranchReportTable();
+      return;
+    }
+    if (e.target.matches('.row-action-btn')) {
+      var ridx = Number(e.target.getAttribute('data-ridx'));
+      var action = e.target.getAttribute('data-action');
+      var row = state.rows[ridx];
+      if (!row) return;
+      row.excludedFromReport = action === 'exclude';
+      renderDashboard();
+      renderTableBody();
+      scheduleSave();
     }
   });
 
   function renderDashboard() {
-    var branchData = selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch);
+    var branchData = selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch, true);
     renderKpis(branchData);
     renderTopModelsChart();
     renderByBranchChart();
@@ -488,8 +601,8 @@
   // ---------------------------------------------------------------------
   // Date range
   // ---------------------------------------------------------------------
-  document.getElementById('dateFrom').addEventListener('change', function (e) { state.dateFrom = e.target.value; scheduleSave(); renderKpis(selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch)); });
-  document.getElementById('dateTo').addEventListener('change', function (e) { state.dateTo = e.target.value; scheduleSave(); renderKpis(selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch)); });
+  document.getElementById('dateFrom').addEventListener('change', function (e) { state.dateFrom = e.target.value; scheduleSave(); renderKpis(selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch, true)); });
+  document.getElementById('dateTo').addEventListener('change', function (e) { state.dateTo = e.target.value; scheduleSave(); renderKpis(selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch, true)); });
 
   // ---------------------------------------------------------------------
   // Add row / Reset
@@ -505,7 +618,7 @@
   document.getElementById('btnReset').addEventListener('click', function () {
     if (confirm('سيتم مسح كل البيانات الحالية نهائيًا من هذا المتصفح. متابعة؟')) {
       localStorage.removeItem(STORAGE_KEY);
-      state = { rows: [], dateFrom: '', dateTo: '' };
+      state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS) };
       renderAll();
     }
   });
@@ -535,6 +648,7 @@
             row[branchField(b.code, 'SoldQty')] = Number(r[branchField(b.code, 'SoldQty')]) || 0;
             row[branchField(b.code, 'Balance')] = Number(r[branchField(b.code, 'Balance')]) || 0;
           });
+          row.excludedFromReport = !!Number(r.Excluded) || false;
           recalcRow(row);
           return row;
         });
@@ -559,7 +673,7 @@
     var cols = TEXT_FIELDS.map(function (f) { return f.key; }).concat(['UnitPrice']);
     BRANCHES.forEach(function (b) { cols.push(branchField(b.code, 'SoldQty')); });
     BRANCHES.forEach(function (b) { cols.push(branchField(b.code, 'Balance')); });
-    cols.push('TotalQtySold', 'TotalBalance');
+    cols.push('TotalQtySold', 'TotalBalance', 'Excluded');
     return cols;
   }
 
@@ -578,7 +692,10 @@
     var cols = exportColumns();
     var data = state.rows.map(function (r) {
       var o = {};
-      cols.forEach(function (c) { o[c] = r[c]; });
+      cols.forEach(function (c) {
+        if (c === 'Excluded') { o[c] = r.excludedFromReport ? 1 : 0; return; }
+        o[c] = r[c];
+      });
       return o;
     });
     var ws = XLSX.utils.json_to_sheet(data, { header: cols });
@@ -591,19 +708,41 @@
   // ---------------------------------------------------------------------
   // PDF export — rendered from real HTML/CSS via html2canvas so the
   // browser's own (correct) Arabic text shaping and bidi layout is what
-  // ends up in the PDF. No manual character reversal, ever.
+  // ends up in the PDF. No manual character reversal, ever. Pages are
+  // paginated to real A4 size by measuring actual row heights first, so
+  // no row is ever split or clipped across a page boundary.
   // ---------------------------------------------------------------------
   var PDF_FONT_FAMILY = 'NotoNaskhArabicPdf';
-  var fontInjected = false;
-  function injectPdfFont() {
-    if (fontInjected || !window.NotoNaskhArabicBase64) return;
+  var pdfFontReady = null;
+  // Injects the @font-face and waits for it to actually finish loading
+  // (data-URI fonts still load asynchronously) before resolving. Measuring
+  // row heights before the font is ready would use fallback-font metrics,
+  // which can be shorter than the real font and clip the last row of a page.
+  function ensurePdfFont() {
+    if (pdfFontReady) return pdfFontReady;
+    if (!window.NotoNaskhArabicBase64) { pdfFontReady = Promise.resolve(); return pdfFontReady; }
     var style = document.createElement('style');
     style.textContent = '@font-face{font-family:"' + PDF_FONT_FAMILY + '";' +
       'src:url(data:font/ttf;base64,' + window.NotoNaskhArabicBase64 + ') format("truetype");' +
       'font-weight:normal;font-style:normal;}';
     document.head.appendChild(style);
-    fontInjected = true;
+    if (document.fonts && document.fonts.load) {
+      pdfFontReady = document.fonts.load('16px "' + PDF_FONT_FAMILY + '"').then(function () {
+        return document.fonts.ready;
+      }).catch(function () {});
+    } else {
+      pdfFontReady = Promise.resolve();
+    }
+    return pdfFontReady;
   }
+
+  // A4 landscape at 96 CSS px/inch (297mm x 210mm).
+  var PAGE_W = 1122;
+  var PAGE_H = 794;
+  var PAGE_PAD_V = 34;
+  var HEADER_GAP = 14;   // safety buffer for margin-collapse under the header block
+  var FOOTER_CLEARANCE = 26; // reserves room for the in-flow page-number line
+  var PAGE_SAFETY = 15;
 
   function fmtPrice(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -611,48 +750,126 @@
     return '<span class="pdf-status ' + status + '">' + escapeAttr(label) + '</span>';
   }
 
-  function buildBranchPageHtml(branch) {
-    var data = computeBranchReportRows(branch.code);
-    var soldSum = 0, balSum = 0;
-    data.forEach(function (d) { soldSum += d.soldHere; balSum += d.balanceHere; });
-    var needOrder = data.filter(function (d) { return d.status === 'critical' || d.status === 'warning'; }).length;
+  function pdfSupplierLine(r) {
+    if (!r.SupplierName) return '';
+    var text = r.SupplierName + (r.SupplierCode ? ' (' + r.SupplierCode + ')' : '');
+    return '<div style="color:#777;font-size:11px;margin-top:2px">' + escapeAttr(text) + '</div>';
+  }
 
-    var rowsHtml = data.map(function (d) {
-      var r = d.row;
-      var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
-      var supplier = r.SupplierName ? '<div style="color:#777;font-size:11px;margin-top:2px">' + escapeAttr(r.SupplierName) + '</div>' : '';
-      return '<tr>' +
-        '<td>' + desc + supplier + '</td>' +
-        '<td class="num">' + fmtPrice(r.UnitPrice) + '</td>' +
-        '<td class="num">' + d.soldHere + '</td>' +
-        '<td class="num">' + d.soldElsewhere + '</td>' +
-        '<td class="num">' + d.balanceHere + '</td>' +
-        '<td>' + pdfStatusBadge(d.status, d.statusLabel) + '</td>' +
-        '</tr>';
-    }).join('');
+  function pdfColgroupHtml() {
+    return '<colgroup>' +
+      '<col style="width:32%"><col style="width:10%"><col style="width:13%"><col style="width:15%"><col style="width:12%"><col style="width:18%">' +
+      '</colgroup>';
+  }
 
-    return '<div class="pdf-page">' +
+  function pdfTableHeadHtml(branchName) {
+    return '<thead><tr>' +
+      '<th>الصنف / الموديل</th><th class="num">السعر</th><th class="num">مبيعات ' + branchName + '</th>' +
+      '<th class="num">مبيعات باقي الفروع</th><th class="num">الرصيد الحالي</th><th>الحالة</th>' +
+      '</tr></thead>';
+  }
+
+  function pdfRowHtml(d) {
+    var r = d.row;
+    var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
+    return '<tr>' +
+      '<td>' + desc + pdfSupplierLine(r) + '</td>' +
+      '<td class="num">' + fmtPrice(r.UnitPrice) + '</td>' +
+      '<td class="num">' + d.soldHere + '</td>' +
+      '<td class="num">' + d.soldElsewhere + '</td>' +
+      '<td class="num">' + d.balanceHere + '</td>' +
+      '<td>' + pdfStatusBadge(d.status, d.statusLabel) + '</td>' +
+      '</tr>';
+  }
+
+  function buildBranchHeaderFirstHtml(branch, kpis) {
+    return '<div class="pdf-header-block">' +
       '<h1 class="pdf-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="pdf-sub pdf-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
       '<div class="pdf-kpis">' +
-      '<div class="pdf-kpi"><div class="l">إجمالي مبيعات الفرع</div><div class="v">' + soldSum + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">إجمالي الرصيد الحالي</div><div class="v">' + balSum + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">أصناف تحتاج طلبًا فوريًا</div><div class="v">' + needOrder + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">عدد الأصناف</div><div class="v">' + data.length + '</div></div>' +
-      '</div>' +
-      '<table class="pdf-table"><colgroup>' +
-      '<col style="width:32%"><col style="width:10%"><col style="width:13%"><col style="width:15%"><col style="width:12%"><col style="width:18%">' +
-      '</colgroup><thead><tr>' +
-      '<th>الصنف / الموديل</th><th class="num">السعر</th><th class="num">مبيعات ' + branch.name + '</th>' +
-      '<th class="num">مبيعات باقي الفروع</th><th class="num">الرصيد الحالي</th><th>الحالة</th>' +
-      '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
-      '<p class="pdf-footer">تقرير فرع ' + branch.name + ' — مرتب من الأكثر إلحاحًا إلى الأقل</p>' +
+      '<div class="pdf-kpi"><div class="l">إجمالي مبيعات الفرع</div><div class="v">' + kpis.soldSum + '</div></div>' +
+      '<div class="pdf-kpi"><div class="l">إجمالي الرصيد الحالي</div><div class="v">' + kpis.balSum + '</div></div>' +
+      '<div class="pdf-kpi"><div class="l">أصناف تحتاج طلبًا فوريًا</div><div class="v">' + kpis.needOrder + '</div></div>' +
+      '<div class="pdf-kpi"><div class="l">عدد الأصناف</div><div class="v">' + kpis.total + '</div></div>' +
+      '</div></div>';
+  }
+
+  function buildBranchHeaderRestHtml(branch) {
+    return '<div class="pdf-header-block">' +
+      '<h1 class="pdf-title" style="font-size:16px;margin-bottom:4px">تقرير فرع ' + branch.name + ' (' + branch.code + ') — تابع</h1>' +
+      '<p class="pdf-sub" style="margin:0">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + '</p>' +
       '</div>';
   }
 
+  // Measures real rendered row heights off-screen, then splits the report
+  // into as many exact-A4 pages as needed without ever cutting a row.
+  function paginateBranchReport(branch) {
+    var data = computeBranchReportRows(branch.code);
+    var soldSum = 0, balSum = 0, needOrder = 0;
+    data.forEach(function (d) {
+      soldSum += d.soldHere; balSum += d.balanceHere;
+      if (d.status === 'critical' || d.status === 'warning') needOrder++;
+    });
+    var kpis = { soldSum: soldSum, balSum: balSum, needOrder: needOrder, total: data.length };
+
+    var root = document.getElementById('pdfRoot');
+    var pages;
+
+    if (!data.length) {
+      pages = [{ isFirst: true, start: 0, end: 0 }];
+    } else {
+      var measure = document.createElement('div');
+      measure.className = 'pdf-page';
+      measure.innerHTML =
+        '<div class="measure-first">' + buildBranchHeaderFirstHtml(branch, kpis) + '</div>' +
+        '<div class="measure-rest">' + buildBranchHeaderRestHtml(branch) + '</div>' +
+        '<table class="pdf-table">' + pdfColgroupHtml() + pdfTableHeadHtml(branch.name) +
+        '<tbody>' + data.map(pdfRowHtml).join('') + '</tbody></table>';
+      root.appendChild(measure);
+
+      var headerFirstH = measure.querySelector('.measure-first').getBoundingClientRect().height + HEADER_GAP;
+      var headerRestH = measure.querySelector('.measure-rest').getBoundingClientRect().height + HEADER_GAP;
+      var theadH = measure.querySelector('thead').getBoundingClientRect().height;
+      var rowHeights = Array.prototype.map.call(measure.querySelectorAll('tbody tr'), function (tr) {
+        return tr.getBoundingClientRect().height;
+      });
+
+      root.removeChild(measure);
+
+      var contentH = PAGE_H - (2 * PAGE_PAD_V) - FOOTER_CLEARANCE - PAGE_SAFETY;
+      var budgetFirst = contentH - headerFirstH - theadH;
+      var budgetRest = contentH - headerRestH - theadH;
+
+      pages = [];
+      var i = 0, isFirst = true;
+      while (i < rowHeights.length) {
+        var budget = isFirst ? budgetFirst : budgetRest;
+        var acc = 0, start = i;
+        while (i < rowHeights.length && (i === start || acc + rowHeights[i] <= budget)) {
+          acc += rowHeights[i];
+          i++;
+        }
+        pages.push({ isFirst: isFirst, start: start, end: i });
+        isFirst = false;
+      }
+    }
+
+    var totalPages = pages.length;
+    return pages.map(function (p, pageIdx) {
+      var subset = data.slice(p.start, p.end);
+      var headerHtml = p.isFirst ? buildBranchHeaderFirstHtml(branch, kpis) : buildBranchHeaderRestHtml(branch);
+      var bodyHtml = subset.length
+        ? '<table class="pdf-table">' + pdfColgroupHtml() + pdfTableHeadHtml(branch.name) + '<tbody>' + subset.map(pdfRowHtml).join('') + '</tbody></table>'
+        : '<p class="pdf-sub">لا توجد أصناف في هذا التقرير (تم استبعاد جميع الأصناف).</p>';
+      return '<div class="pdf-page pdf-page-fixed">' + headerHtml + bodyHtml +
+        '<div class="pdf-page-num">صفحة ' + (pageIdx + 1) + ' من ' + totalPages + '</div></div>';
+    });
+  }
+
   function buildCoverPageHtml(branchesIncluded) {
+    var rr = reportableRows();
     var totalSold = 0, totalBalance = 0;
-    state.rows.forEach(function (r) { totalSold += r.TotalQtySold; totalBalance += r.TotalBalance; });
+    rr.forEach(function (r) { totalSold += r.TotalQtySold; totalBalance += r.TotalBalance; });
 
     var branchRowsHtml = branchesIncluded.map(function (b) {
       var sold = 0, bal = 0, needOrder = 0;
@@ -664,13 +881,13 @@
       return '<tr><td>' + b.code + ' - ' + b.name + '</td><td class="num">' + sold + '</td><td class="num">' + bal + '</td><td class="num">' + needOrder + '</td></tr>';
     }).join('');
 
-    return '<div class="pdf-page">' +
+    return '<div class="pdf-page pdf-page-fixed">' +
       '<h1 class="pdf-title">تقرير المبيعات الأسبوعية — جميع الفروع</h1>' +
       '<p class="pdf-sub pdf-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
       '<div class="pdf-kpis">' +
       '<div class="pdf-kpi"><div class="l">إجمالي القطع المباعة</div><div class="v">' + totalSold + '</div></div>' +
       '<div class="pdf-kpi"><div class="l">إجمالي الرصيد المتبقي</div><div class="v">' + totalBalance + '</div></div>' +
-      '<div class="pdf-kpi"><div class="l">عدد الأصناف</div><div class="v">' + state.rows.length + '</div></div>' +
+      '<div class="pdf-kpi"><div class="l">عدد الأصناف بالتقرير</div><div class="v">' + rr.length + '</div></div>' +
       '</div>' +
       '<table class="pdf-table"><colgroup><col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>' +
       '<thead><tr><th>الفرع</th><th class="num">مباع</th><th class="num">رصيد</th><th class="num">يحتاج طلبًا فوريًا</th></tr></thead>' +
@@ -681,11 +898,7 @@
 
   function captureElementToImage(el) {
     return html2canvas(el, { scale: 2, backgroundColor: '#ffffff', useCORS: true }).then(function (canvas) {
-      return {
-        dataUrl: canvas.toDataURL('image/jpeg', 0.92),
-        widthPx: canvas.width,
-        heightPx: canvas.height
-      };
+      return { dataUrl: canvas.toDataURL('image/jpeg', 0.92) };
     });
   }
 
@@ -700,56 +913,55 @@
   });
 
   function generatePdf() {
-    if (!state.rows.length) {
-      alert('لا توجد بيانات لتصديرها بعد.');
+    if (!reportableRows().length) {
+      alert('لا توجد بيانات لتصديرها بعد (أو كل الأصناف مستبعدة من التقرير).');
       return;
     }
-    injectPdfFont();
     setBusy(true);
 
     var root = document.getElementById('pdfRoot');
     root.innerHTML = '';
 
-    var branchesIncluded = selectedBranch === 'all' ? BRANCHES : [branchByCode(selectedBranch)];
+    ensurePdfFont().then(function () {
+      var branchesIncluded = selectedBranch === 'all' ? BRANCHES : [branchByCode(selectedBranch)];
 
-    var pageBuilders = [];
-    if (selectedBranch === 'all') pageBuilders.push(function () { return buildCoverPageHtml(branchesIncluded); });
-    branchesIncluded.forEach(function (b) {
-      pageBuilders.push(function () { return buildBranchPageHtml(b); });
-    });
+      // Built only after the font is confirmed loaded, so the row-height
+      // measurements inside paginateBranchReport use the real metrics.
+      var pageHtmlList = [];
+      if (selectedBranch === 'all') pageHtmlList.push(buildCoverPageHtml(branchesIncluded));
+      branchesIncluded.forEach(function (b) {
+        pageHtmlList = pageHtmlList.concat(paginateBranchReport(b));
+      });
 
-    var jsPDF = window.jspdf.jsPDF;
-    var doc = null;
-    var PT_PER_PX = 72 / 96;
+      var jsPDF = window.jspdf.jsPDF;
+      var doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+      var pageWpt = doc.internal.pageSize.getWidth();
+      var pageHpt = doc.internal.pageSize.getHeight();
 
-    // Render + capture pages sequentially (each page is injected, measured,
-    // captured, then removed) so we never hold more than one heavy page in the DOM.
-    var chain = Promise.resolve();
-    pageBuilders.forEach(function (buildFn, i) {
-      chain = chain.then(function () {
-        var wrapper = document.createElement('div');
-        wrapper.innerHTML = buildFn();
-        var pageEl = wrapper.firstChild;
-        pageEl.style.fontFamily = '"' + PDF_FONT_FAMILY + '", system-ui, sans-serif';
-        root.appendChild(pageEl);
-        return captureElementToImage(pageEl).then(function (img) {
-          root.removeChild(pageEl);
-          var wPt = img.widthPx * PT_PER_PX / 2; // divide by html2canvas scale factor
-          var hPt = img.heightPx * PT_PER_PX / 2;
-          if (!doc) {
-            doc = new jsPDF({ orientation: wPt > hPt ? 'l' : 'p', unit: 'pt', format: [wPt, hPt] });
-          } else {
-            doc.addPage([wPt, hPt], wPt > hPt ? 'l' : 'p');
-          }
-          doc.addImage(img.dataUrl, 'JPEG', 0, 0, wPt, hPt);
+      // Render + capture pages sequentially (each page is injected, captured,
+      // then removed) so we never hold more than one heavy page in the DOM.
+      var chain = Promise.resolve();
+      pageHtmlList.forEach(function (html, i) {
+        chain = chain.then(function () {
+          var wrapper = document.createElement('div');
+          wrapper.innerHTML = html;
+          var pageEl = wrapper.firstChild;
+          pageEl.style.fontFamily = '"' + PDF_FONT_FAMILY + '", system-ui, sans-serif';
+          root.appendChild(pageEl);
+          return captureElementToImage(pageEl).then(function (img) {
+            root.removeChild(pageEl);
+            if (i > 0) doc.addPage();
+            doc.addImage(img.dataUrl, 'JPEG', 0, 0, pageWpt, pageHpt);
+          });
         });
       });
-    });
 
-    chain.then(function () {
-      var scopeLabel = selectedBranch === 'all' ? 'كل-الفروع' : (branchByCode(selectedBranch).code + '-' + branchByCode(selectedBranch).name);
-      var fname = 'تقرير-' + scopeLabel + '-' + (state.dateFrom || '') + '_' + (state.dateTo || '') + '.pdf';
-      doc.save(fname);
+      return chain.then(function () {
+        var scopeLabel = selectedBranch === 'all' ? 'كل-الفروع' : (branchByCode(selectedBranch).code + '-' + branchByCode(selectedBranch).name);
+        var fname = 'تقرير-' + scopeLabel + '-' + (state.dateFrom || '') + '_' + (state.dateTo || '') + '.pdf';
+        doc.save(fname);
+      });
+    }).then(function () {
       setBusy(false);
     }).catch(function (err) {
       console.error(err);
@@ -770,6 +982,8 @@
   }
 
   load();
+  initTheme();
   renderBranchSelect();
+  initSettingsPanel();
   renderAll();
 })();
