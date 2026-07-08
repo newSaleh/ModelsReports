@@ -43,14 +43,17 @@
 }
 .pxt-page-badge.mode-text { background: rgba(12,163,12,0.12); color: var(--status-good); border-color: transparent; }
 .pxt-page-badge.mode-ocr { background: rgba(42,120,214,0.12); color: var(--series-1); border-color: transparent; }
+.pxt-page-badge.mode-processing { animation: pxt-pulse 1.2s ease-in-out infinite; }
 .pxt-page-badge.mode-pending { opacity: 0.55; }
+
+@keyframes pxt-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 .pxt-output-wrap { position: relative; }
 #pxtOutput {
   width: 100%; min-height: 420px; max-height: 70vh;
   resize: vertical; padding: 16px 18px; border-radius: var(--radius);
   border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
-  font-family: 'Courier New', ui-monospace, monospace; font-size: 0.88rem; line-height: 1.9;
+  font-family: var(--font); font-size: 0.95rem; line-height: 1.9;
   direction: rtl; white-space: pre-wrap;
 }
 #pxtOutput::placeholder { color: var(--text-muted); font-family: var(--font); }
