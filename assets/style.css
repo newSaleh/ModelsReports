@@ -83,6 +83,20 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
+.site-switch {
+  display: flex; gap: 4px; padding: 10px 24px 0; background: var(--page-plane);
+}
+.site-switch-link {
+  padding: 8px 16px; border-radius: 8px 8px 0 0; font-size: 0.82rem;
+  color: var(--text-secondary); text-decoration: none;
+  border: 1px solid transparent; margin-bottom: -1px;
+}
+.site-switch-link:hover { color: var(--text-primary); }
+.site-switch-link.active {
+  background: var(--surface-1); color: var(--text-primary); font-weight: 600;
+  border-color: var(--border); border-bottom-color: var(--surface-1);
+}
+
 .app-header {
   background: var(--surface-1);
   border-bottom: 1px solid var(--border);
