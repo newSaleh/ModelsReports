@@ -28,7 +28,7 @@
   var DEFAULT_SETTINGS = {
     hotSoldMin: 5,              // minimum weekly sales in a branch to call it "selling well"
     minBalance: 10,             // current balance below this (while selling well) -> needs a reorder
-    opportunityMinTotalSold: 15, // sold this well elsewhere to justify stocking a new branch
+    opportunityMinTotalSold: 5, // sold this well elsewhere to justify stocking a new branch
     maxBalance: 150             // current balance above this -> flagged as overstock/surplus
   };
 
@@ -367,12 +367,23 @@
       var soldHere = Number(r[branchField(branchCode, 'SoldQty')]) || 0;
       var balanceHere = Number(r[branchField(branchCode, 'Balance')]) || 0;
       var soldElsewhere = (r.TotalQtySold || 0) - soldHere;
-      var sellingWell = soldHere >= settings.hotSoldMin || soldElsewhere >= settings.opportunityMinTotalSold;
+      // "Selling well" looks at total sales across ALL branches (not just
+      // this branch or just the others in isolation) so a model that sells
+      // steadily split across branches still counts — e.g. 4 here + 14
+      // elsewhere clears a threshold of 15 even though neither half alone does.
+      var sellingWell = soldHere >= settings.hotSoldMin || (r.TotalQtySold || 0) >= settings.opportunityMinTotalSold;
 
       var status, statusLabel;
       if (r.excludedFromReport) {
         status = 'excluded';
         statusLabel = 'مستبعد من التقرير';
+      } else if (soldElsewhere >= settings.opportunityMinTotalSold && soldHere === 0 && balanceHere === 0) {
+        // Checked before the generic reorder case below: a model that has
+        // never been carried in this branch at all is a "new opportunity"
+        // (consider introducing it), which is a different action from
+        // "restock what you already sell here".
+        status = 'opportunity';
+        statusLabel = 'موديل ناجح — غير متوفر لديك';
       } else if (sellingWell && balanceHere < settings.minBalance) {
         if (balanceHere === 0) {
           status = 'critical';
@@ -381,9 +392,6 @@
           status = 'warning';
           statusLabel = 'رصيد منخفض — اطلب الآن';
         }
-      } else if (soldElsewhere >= settings.opportunityMinTotalSold && soldHere === 0 && balanceHere === 0) {
-        status = 'opportunity';
-        statusLabel = 'موديل ناجح — غير متوفر لديك';
       } else if (balanceHere > settings.maxBalance) {
         status = 'surplus';
         statusLabel = 'فائض في المخزون';
