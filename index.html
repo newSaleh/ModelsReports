@@ -78,7 +78,10 @@
           <h2 id="branchReportTitle">تقرير الفرع التفصيلي</h2>
           <p class="panel-hint" id="branchReportHint"></p>
         </div>
-        <button id="btnSettingsToggle" class="btn btn-ghost">⚙️ إعدادات التقييم</button>
+        <div class="panel-head-actions">
+          <button id="btnSettingsToggle" class="btn btn-ghost">⚙️ إعدادات التقييم</button>
+          <button id="btnSupplierMergeToggle" class="btn btn-ghost">🔗 دمج أكواد الموردين</button>
+        </div>
       </div>
 
       <div class="settings-panel" id="settingsPanel" hidden>
@@ -106,6 +109,17 @@
           </div>
         </div>
         <button id="btnSettingsReset" class="btn btn-ghost">استعادة الإعدادات الافتراضية</button>
+      </div>
+
+      <div class="settings-panel" id="supplierMergePanel" hidden>
+        <p class="settings-intro">إذا كان لمورد واحد أكثر من كود مرجعي، اكتب كل الأكواد الخاصة بنفس المورد هنا: زوج
+          أكواد مفصول بفاصلة في كل سطر. الأكواد المرتبطة (حتى لو عبر أكثر من زوج، مثل 0666,0418 ثم
+          0666,0999) تُعامَل كمورد واحد تلقائيًا في البحث والتقرير وملف PDF. يُحفظ هذا في متصفحك فقط.</p>
+        <textarea id="supplierAliasInput" dir="ltr" rows="8" placeholder="0180,0252&#10;0666,0418&#10;0666,0999"></textarea>
+        <div class="supplier-merge-actions">
+          <button id="btnSupplierMergeSave" class="btn btn-primary">حفظ الدمج</button>
+          <span id="supplierMergeStatus" class="supplier-merge-status"></span>
+        </div>
       </div>
 
       <div class="alert-filters" id="alertFilters"></div>

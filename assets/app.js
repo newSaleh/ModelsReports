@@ -45,12 +45,73 @@
     rows: [],
     dateFrom: '',
     dateTo: '',
-    settings: Object.assign({}, DEFAULT_SETTINGS)
+    settings: Object.assign({}, DEFAULT_SETTINGS),
+    supplierAliasText: ''
   };
 
   var searchTerm = '';
   var statusFilter = 'all';
   var selectedBranch = BRANCHES[0].code;
+  var supplierAliasMap = {}; // alias supplier code -> canonical supplier code, derived from supplierAliasText
+
+  // ---------------------------------------------------------------------
+  // Supplier code merging — some suppliers have more than one reference
+  // code in the source data. The user lists related codes (one pair per
+  // line, comma-separated); codes connected across multiple lines (e.g.
+  // "0666,0418" then "0666,0999") are grouped transitively into one
+  // supplier. The canonical code for each group is whichever member
+  // appeared earliest as the first code on its line.
+  // ---------------------------------------------------------------------
+  function parseSupplierAliasText(text) {
+    var adj = {};
+    var firstColOrder = [];
+    var seenFirstCol = {};
+    function addEdge(a, b) {
+      adj[a] = adj[a] || {}; adj[a][b] = true;
+      adj[b] = adj[b] || {}; adj[b][a] = true;
+    }
+    (text || '').split('\n').forEach(function (line) {
+      var parts = line.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      if (parts.length < 2) return;
+      var a = parts[0];
+      for (var i = 1; i < parts.length; i++) addEdge(a, parts[i]);
+      if (!seenFirstCol[a]) { seenFirstCol[a] = true; firstColOrder.push(a); }
+    });
+    var priority = {};
+    firstColOrder.forEach(function (c, i) { priority[c] = i; });
+
+    var visited = {};
+    var map = {};
+    Object.keys(adj).forEach(function (start) {
+      if (visited[start]) return;
+      var queue = [start], comp = [];
+      visited[start] = true;
+      while (queue.length) {
+        var cur = queue.shift();
+        comp.push(cur);
+        Object.keys(adj[cur]).forEach(function (n) {
+          if (!visited[n]) { visited[n] = true; queue.push(n); }
+        });
+      }
+      var canonical = comp.slice().sort(function (x, y) {
+        var px = priority[x] === undefined ? Infinity : priority[x];
+        var py = priority[y] === undefined ? Infinity : priority[y];
+        if (px !== py) return px - py;
+        return x < y ? -1 : (x > y ? 1 : 0);
+      })[0];
+      comp.forEach(function (c) { if (c !== canonical) map[c] = canonical; });
+    });
+    return map;
+  }
+
+  function rebuildSupplierAliasMap() {
+    supplierAliasMap = parseSupplierAliasText(state.supplierAliasText || '');
+  }
+
+  function resolveSupplierCode(code) {
+    if (!code) return code;
+    return supplierAliasMap[code] || code;
+  }
 
   function blankRow() {
     var r = {};
@@ -113,7 +174,9 @@
         if (parsed && Array.isArray(parsed.rows)) {
           state = parsed;
           state.settings = Object.assign({}, DEFAULT_SETTINGS, state.settings || {});
+          state.supplierAliasText = state.supplierAliasText || '';
           state.rows.forEach(function (r) { if (r.excludedFromReport == null) r.excludedFromReport = false; });
+          rebuildSupplierAliasMap();
           return;
         }
       } catch (e) { console.warn('bad saved state', e); }
@@ -124,6 +187,8 @@
     state.dateFrom = '';
     state.dateTo = '';
     state.settings = Object.assign({}, DEFAULT_SETTINGS);
+    state.supplierAliasText = '';
+    rebuildSupplierAliasMap();
   }
 
   // ---------------------------------------------------------------------
@@ -229,6 +294,45 @@
   }
 
   // ---------------------------------------------------------------------
+  // Supplier code merge panel
+  // ---------------------------------------------------------------------
+  function updateSupplierMergeStatus() {
+    var statusEl = document.getElementById('supplierMergeStatus');
+    if (!statusEl) return;
+    var aliasCodes = Object.keys(supplierAliasMap);
+    if (!aliasCodes.length) {
+      statusEl.textContent = 'لا يوجد دمج محفوظ بعد.';
+      return;
+    }
+    var groups = {};
+    aliasCodes.forEach(function (c) { groups[supplierAliasMap[c]] = true; });
+    var groupCount = Object.keys(groups).length;
+    statusEl.textContent = 'تم دمج ' + aliasCodes.length + ' كودًا إضافيًا ضمن ' + groupCount + ' مورد.';
+  }
+
+  function initSupplierMergePanel() {
+    var panel = document.getElementById('supplierMergePanel');
+    var toggleBtn = document.getElementById('btnSupplierMergeToggle');
+    var textarea = document.getElementById('supplierAliasInput');
+
+    textarea.value = state.supplierAliasText || '';
+    updateSupplierMergeStatus();
+
+    toggleBtn.addEventListener('click', function () {
+      panel.hidden = !panel.hidden;
+    });
+
+    document.getElementById('btnSupplierMergeSave').addEventListener('click', function () {
+      state.supplierAliasText = textarea.value;
+      rebuildSupplierAliasMap();
+      updateSupplierMergeStatus();
+      renderDashboard();
+      renderTableBody();
+      scheduleSave();
+    });
+  }
+
+  // ---------------------------------------------------------------------
   // Table rendering (editable)
   // ---------------------------------------------------------------------
   function renderTableHead() {
@@ -252,7 +356,8 @@
 
   function rowMatchesSearch(r) {
     if (!searchTerm) return true;
-    var hay = (r.SupplierName + ' ' + r.StockGroupName + ' ' + r.StockCode + ' ' + r.ModelCode + ' ' + r.SupplierCode).toLowerCase();
+    var hay = (r.SupplierName + ' ' + r.StockGroupName + ' ' + r.StockCode + ' ' + r.ModelCode + ' ' +
+      r.SupplierCode + ' ' + resolveSupplierCode(r.SupplierCode)).toLowerCase();
     return hay.indexOf(searchTerm) !== -1;
   }
 
@@ -499,7 +604,8 @@
 
   function supplierLineHtml(r) {
     if (!r.SupplierName) return '';
-    var text = r.SupplierName + (r.SupplierCode ? ' (' + r.SupplierCode + ')' : '');
+    var code = resolveSupplierCode(r.SupplierCode);
+    var text = r.SupplierName + (code ? ' (' + code + ')' : '');
     return '<br><span style="color:var(--text-muted);font-size:0.75rem">' + escapeAttr(text) + '</span>';
   }
 
@@ -672,7 +778,10 @@
   document.getElementById('btnReset').addEventListener('click', function () {
     if (confirm('سيتم مسح كل البيانات الحالية نهائيًا من هذا المتصفح. متابعة؟')) {
       localStorage.removeItem(STORAGE_KEY);
-      state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS) };
+      state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS), supplierAliasText: '' };
+      rebuildSupplierAliasMap();
+      document.getElementById('supplierAliasInput').value = '';
+      updateSupplierMergeStatus();
       renderAll();
     }
   });
@@ -806,7 +915,8 @@
 
   function pdfSupplierLine(r) {
     if (!r.SupplierName) return '';
-    var text = r.SupplierName + (r.SupplierCode ? ' (' + r.SupplierCode + ')' : '');
+    var code = resolveSupplierCode(r.SupplierCode);
+    var text = r.SupplierName + (code ? ' (' + code + ')' : '');
     return ' <span class="pdf-supplier-inline">— ' + escapeAttr(text) + '</span>';
   }
 
@@ -1029,5 +1139,6 @@
   initTheme();
   renderBranchSelect();
   initSettingsPanel();
+  initSupplierMergePanel();
   renderAll();
 })();

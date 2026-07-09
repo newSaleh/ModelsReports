@@ -201,6 +201,7 @@ main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
 
 .alerts-panel { margin-bottom: 20px; }
 .panel-head-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.panel-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .settings-panel {
   background: var(--page-plane); border: 1px solid var(--border);
@@ -225,6 +226,15 @@ main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
   background: var(--surface-2); color: var(--text-primary); font-family: var(--font); font-size: 0.85rem;
 }
 .settings-field small { grid-row: 3; align-self: start; color: var(--text-muted); font-size: 0.7rem; line-height: 1.4; }
+
+#supplierAliasInput {
+  width: 100%; min-height: 130px; resize: vertical; font-family: var(--font);
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+  background: var(--surface-2); color: var(--text-primary); font-size: 0.82rem;
+  text-align: left; font-variant-numeric: tabular-nums;
+}
+.supplier-merge-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.supplier-merge-status { font-size: 0.78rem; color: var(--text-secondary); }
 
 .alert-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .chip-filter {
