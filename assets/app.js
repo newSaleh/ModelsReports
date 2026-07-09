@@ -26,10 +26,10 @@
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
   var DEFAULT_SETTINGS = {
-    hotSoldMin: 5,              // minimum weekly sales in a branch to call it "selling well"
-    minBalance: 10,             // current balance below this (while selling well) -> needs a reorder
-    opportunityMinTotalSold: 5, // sold this well elsewhere to justify stocking a new branch
-    maxBalance: 150             // current balance above this -> flagged as overstock/surplus
+    hotSoldMin: 5,               // minimum weekly sales in a branch to call it "selling well"
+    minBalance: 7,               // current balance below this (while selling well) -> needs a reorder
+    opportunityMinTotalSold: 20, // sold this well elsewhere to justify stocking a new branch
+    maxBalance: 50               // current balance above this -> flagged as overstock/surplus
   };
 
   function branchField(code, suffix) { return code + suffix; }
