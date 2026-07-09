@@ -152,9 +152,16 @@ html, body {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px);
   background: var(--status-good); color: #fff; padding: 8px 18px; border-radius: 999px;
   font-size: 0.85rem; opacity: 0; pointer-events: none; transition: all 0.3s ease; z-index: 100;
+  max-width: 90vw; text-align: center;
 }
 .save-indicator.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.save-indicator.error { background: var(--status-critical); }
 .busy-indicator { background: var(--series-1); bottom: 60px; }
+
+.storage-warning-banner {
+  background: var(--status-critical); color: #fff; padding: 10px 20px; font-size: 0.85rem;
+  text-align: center;
+}
 
 main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
 

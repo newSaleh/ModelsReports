@@ -149,8 +149,11 @@
   function save() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      flashSaved();
-    } catch (e) { console.warn('save failed', e); }
+      flashSaved(true);
+    } catch (e) {
+      console.warn('save failed', e);
+      flashSaved(false);
+    }
   }
 
   var saveTimer = null;
@@ -159,15 +162,36 @@
     saveTimer = setTimeout(save, 300);
   }
 
-  function flashSaved() {
+  // Verifies localStorage actually round-trips a value (some browsers accept
+  // writes silently in restricted modes — private browsing, storage blocked
+  // by policy — without throwing, but never persist them).
+  function isStorageWorking() {
+    try {
+      var testKey = '__storageTest__';
+      localStorage.setItem(testKey, '1');
+      var ok = localStorage.getItem(testKey) === '1';
+      localStorage.removeItem(testKey);
+      return ok;
+    } catch (e) { return false; }
+  }
+
+  function flashSaved(ok) {
     var el = document.getElementById('saveIndicator');
+    if (ok) {
+      el.textContent = 'تم الحفظ ✓';
+      el.classList.remove('error');
+    } else {
+      el.textContent = 'تعذّر الحفظ — تصفح المتصفح الخاص أو إعدادات الخصوصية قد تمنع حفظ البيانات ✕';
+      el.classList.add('error');
+    }
     el.classList.add('show');
     clearTimeout(flashSaved._t);
-    flashSaved._t = setTimeout(function () { el.classList.remove('show'); }, 1200);
+    flashSaved._t = setTimeout(function () { el.classList.remove('show'); }, ok ? 1200 : 5000);
   }
 
   function load() {
-    var raw = localStorage.getItem(STORAGE_KEY);
+    var raw = null;
+    try { raw = localStorage.getItem(STORAGE_KEY); } catch (e) { console.warn('storage read failed', e); }
     if (raw) {
       try {
         var parsed = JSON.parse(raw);
@@ -777,7 +801,7 @@
 
   document.getElementById('btnReset').addEventListener('click', function () {
     if (confirm('سيتم مسح كل البيانات الحالية نهائيًا من هذا المتصفح. متابعة؟')) {
-      localStorage.removeItem(STORAGE_KEY);
+      try { localStorage.removeItem(STORAGE_KEY); } catch (e) { console.warn('storage clear failed', e); }
       state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS), supplierAliasText: '' };
       rebuildSupplierAliasMap();
       document.getElementById('supplierAliasInput').value = '';
@@ -1133,6 +1157,11 @@
     renderLegend();
     renderTable();
     renderDashboard();
+  }
+
+  if (!isStorageWorking()) {
+    var banner = document.getElementById('storageWarningBanner');
+    if (banner) banner.hidden = false;
   }
 
   load();
