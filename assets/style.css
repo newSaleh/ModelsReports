@@ -244,6 +244,18 @@ main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
 .supplier-merge-status { font-size: 0.78rem; color: var(--text-secondary); }
 
 .alert-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+
+.supplier-exclude-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 14px; padding: 8px 12px; border: 1px dashed var(--border); border-radius: 8px;
+}
+.supplier-exclude-bar label { font-size: 0.8rem; color: var(--text-secondary); }
+#supplierExcludeInput {
+  width: 130px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px;
+  background: var(--surface-2); color: var(--text-primary); font-family: var(--font); font-size: 0.85rem;
+  text-align: left; font-variant-numeric: tabular-nums;
+}
+.supplier-exclude-status { font-size: 0.78rem; color: var(--text-secondary); }
 .chip-filter {
   border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px;
   padding: 5px 12px; font-size: 0.78rem; cursor: pointer; color: var(--text-secondary);

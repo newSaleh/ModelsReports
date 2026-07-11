@@ -374,6 +374,44 @@
   }
 
   // ---------------------------------------------------------------------
+  // Exclude-by-supplier-code bar (shown above the branch report table,
+  // under the classification chips) — typing a supplier reference code
+  // excludes every item from that supplier (aliased codes included) from
+  // the report entirely, regardless of which classification it's in.
+  // ---------------------------------------------------------------------
+  function initSupplierExcludeBar() {
+    var input = document.getElementById('supplierExcludeInput');
+    var statusEl = document.getElementById('supplierExcludeStatus');
+    var btn = document.getElementById('btnSupplierExclude');
+    if (!input || !btn) return;
+
+    function run() {
+      var code = input.value.trim();
+      if (!code) { statusEl.textContent = 'اكتب كود المورد أولًا.'; return; }
+      var resolved = resolveSupplierCode(code);
+      var matches = state.rows.filter(function (r) {
+        return !r.excludedFromReport && resolveSupplierCode(r.SupplierCode) === resolved;
+      });
+      if (!matches.length) {
+        statusEl.textContent = 'لا توجد أصناف غير مستبعدة بهذا الكود.';
+        return;
+      }
+      matches.forEach(function (r) { r.excludedFromReport = true; });
+      var name = matches[0].SupplierName || '';
+      statusEl.textContent = 'تم استبعاد ' + matches.length + ' صنف' + (name ? (' — ' + name) : '') + ' (' + resolved + ') من التقرير.';
+      input.value = '';
+      renderDashboard();
+      renderTableBody();
+      scheduleSave();
+    }
+
+    btn.addEventListener('click', run);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); run(); }
+    });
+  }
+
+  // ---------------------------------------------------------------------
   // Table rendering (editable)
   // ---------------------------------------------------------------------
   function renderTableHead() {
@@ -1197,5 +1235,6 @@
   renderBranchSelect();
   initSettingsPanel();
   initSupplierMergePanel();
+  initSupplierExcludeBar();
   renderAll();
 })();
