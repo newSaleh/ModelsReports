@@ -32,6 +32,18 @@
     maxBalance: 50               // current balance above this -> flagged as overstock/surplus
   };
 
+  // Default supplier-code merge list (plain reference numbers only, no
+  // supplier names or business data) — pre-seeded so it works out of the
+  // box; still fully editable/overridable from the "🔗 دمج أكواد الموردين" panel.
+  var DEFAULT_SUPPLIER_ALIAS_TEXT = [
+    '0180,0252', '0183,0284', '0182,0271', '0160,0202', '0137,0240',
+    '0181,0203', '0158,0246', '0145,0253', '0117,0251', '0115,0201',
+    '0198,0434', '0317,0459', '0310,0430', '0103,0218', '0306,0416',
+    '0309,0444', '0302,0436', '0104,0221', '0318,0230', '0106,0247',
+    '0165,0428', '0319,0447', '0161,0401', '0178,0293', '0184,0297',
+    '0179,0407', '0159,0402', '0108,0299', '0666,0418', '0666,0999'
+  ].join('\n');
+
   function branchField(code, suffix) { return code + suffix; }
   function branchByCode(code) {
     for (var i = 0; i < BRANCHES.length; i++) if (BRANCHES[i].code === code) return BRANCHES[i];
@@ -198,9 +210,13 @@
         if (parsed && Array.isArray(parsed.rows)) {
           state = parsed;
           state.settings = Object.assign({}, DEFAULT_SETTINGS, state.settings || {});
-          state.supplierAliasText = state.supplierAliasText || '';
+          // Only seed the default merge list if this field has never been
+          // saved before — an explicitly-cleared empty string is left alone.
+          var seededAlias = false;
+          if (state.supplierAliasText == null) { state.supplierAliasText = DEFAULT_SUPPLIER_ALIAS_TEXT; seededAlias = true; }
           state.rows.forEach(function (r) { if (r.excludedFromReport == null) r.excludedFromReport = false; });
           rebuildSupplierAliasMap();
+          if (seededAlias) save();
           return;
         }
       } catch (e) { console.warn('bad saved state', e); }
@@ -211,8 +227,9 @@
     state.dateFrom = '';
     state.dateTo = '';
     state.settings = Object.assign({}, DEFAULT_SETTINGS);
-    state.supplierAliasText = '';
+    state.supplierAliasText = DEFAULT_SUPPLIER_ALIAS_TEXT;
     rebuildSupplierAliasMap();
+    save();
   }
 
   // ---------------------------------------------------------------------
@@ -802,9 +819,9 @@
   document.getElementById('btnReset').addEventListener('click', function () {
     if (confirm('سيتم مسح كل البيانات الحالية نهائيًا من هذا المتصفح. متابعة؟')) {
       try { localStorage.removeItem(STORAGE_KEY); } catch (e) { console.warn('storage clear failed', e); }
-      state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS), supplierAliasText: '' };
+      state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS), supplierAliasText: DEFAULT_SUPPLIER_ALIAS_TEXT };
       rebuildSupplierAliasMap();
-      document.getElementById('supplierAliasInput').value = '';
+      document.getElementById('supplierAliasInput').value = state.supplierAliasText;
       updateSupplierMergeStatus();
       renderAll();
     }
@@ -974,7 +991,7 @@
     return '<div class="pdf-header-block">' +
       '<h1 class="pdf-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="pdf-sub pdf-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
-      '<p class="pdf-sub" style="margin:0">مرتب تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
+      '<p class="pdf-sub" style="margin:0">مرتب حسب المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
       '</div>';
   }
 
@@ -988,10 +1005,23 @@
   // Measures real rendered row heights off-screen, then splits the report
   // into as many exact-A4 pages as needed without ever cutting a row.
   function paginateBranchReport(branch) {
-    // Sorted by quantity sold in the rest of the branches, descending (ties
-    // broken by this branch's own sales) — this is the printed report's
-    // order, independent of the on-screen table's urgency-first ordering.
-    var data = computeBranchReportRows(branch.code).slice().sort(function (a, b) {
+    // Sorted by supplier first (merged-alias suppliers grouped together via
+    // their canonical code), then within each supplier by quantity sold in
+    // the rest of the branches, descending — the printed report's order,
+    // independent of the on-screen table's urgency-first ordering.
+    var rawData = computeBranchReportRows(branch.code);
+    var canonicalNameFor = {};
+    rawData.forEach(function (d) {
+      var code = resolveSupplierCode(d.row.SupplierCode);
+      if (!canonicalNameFor[code] || d.row.SupplierCode === code) {
+        canonicalNameFor[code] = d.row.SupplierName || '';
+      }
+    });
+    var data = rawData.slice().sort(function (a, b) {
+      var codeA = resolveSupplierCode(a.row.SupplierCode), codeB = resolveSupplierCode(b.row.SupplierCode);
+      var nameA = canonicalNameFor[codeA] || '', nameB = canonicalNameFor[codeB] || '';
+      if (nameA !== nameB) return nameA < nameB ? -1 : 1;
+      if (codeA !== codeB) return codeA < codeB ? -1 : 1;
       if (b.soldElsewhere !== a.soldElsewhere) return b.soldElsewhere - a.soldElsewhere;
       return b.soldHere - a.soldHere;
     });
@@ -1070,7 +1100,7 @@
       '<table class="pdf-table"><colgroup><col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>' +
       '<thead><tr><th>الفرع</th><th class="num">مباع</th><th class="num">رصيد</th><th class="num">يحتاج طلبًا فوريًا</th></tr></thead>' +
       '<tbody>' + branchRowsHtml + '</tbody></table>' +
-      '<p class="pdf-footer">الصفحات التالية: تقرير تفصيلي مستقل لكل فرع، مرتب تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
+      '<p class="pdf-footer">الصفحات التالية: تقرير تفصيلي مستقل لكل فرع، مرتب حسب المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
       '</div>';
   }
 
