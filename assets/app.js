@@ -991,7 +991,7 @@
     return '<div class="pdf-header-block">' +
       '<h1 class="pdf-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="pdf-sub pdf-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
-      '<p class="pdf-sub" style="margin:0">مرتب حسب المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
+      '<p class="pdf-sub" style="margin:0">مرتب تصاعديًا حسب كود المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
       '</div>';
   }
 
@@ -1005,23 +1005,21 @@
   // Measures real rendered row heights off-screen, then splits the report
   // into as many exact-A4 pages as needed without ever cutting a row.
   function paginateBranchReport(branch) {
-    // Sorted by supplier first (merged-alias suppliers grouped together via
-    // their canonical code), then within each supplier by quantity sold in
-    // the rest of the branches, descending — the printed report's order,
-    // independent of the on-screen table's urgency-first ordering.
+    // Sorted by supplier first — ascending by supplier code (merged-alias
+    // suppliers grouped together via their canonical code, lowest code
+    // first, e.g. 001 before 002) — then within each supplier by quantity
+    // sold in the rest of the branches, descending. This is the printed
+    // report's order, independent of the on-screen table's urgency-first
+    // ordering.
     var rawData = computeBranchReportRows(branch.code);
-    var canonicalNameFor = {};
-    rawData.forEach(function (d) {
-      var code = resolveSupplierCode(d.row.SupplierCode);
-      if (!canonicalNameFor[code] || d.row.SupplierCode === code) {
-        canonicalNameFor[code] = d.row.SupplierName || '';
-      }
-    });
     var data = rawData.slice().sort(function (a, b) {
-      var codeA = resolveSupplierCode(a.row.SupplierCode), codeB = resolveSupplierCode(b.row.SupplierCode);
-      var nameA = canonicalNameFor[codeA] || '', nameB = canonicalNameFor[codeB] || '';
-      if (nameA !== nameB) return nameA < nameB ? -1 : 1;
-      if (codeA !== codeB) return codeA < codeB ? -1 : 1;
+      var codeA = resolveSupplierCode(a.row.SupplierCode) || '';
+      var codeB = resolveSupplierCode(b.row.SupplierCode) || '';
+      if (codeA !== codeB) {
+        var numA = parseFloat(codeA), numB = parseFloat(codeB);
+        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+        return codeA < codeB ? -1 : 1;
+      }
       if (b.soldElsewhere !== a.soldElsewhere) return b.soldElsewhere - a.soldElsewhere;
       return b.soldHere - a.soldHere;
     });
@@ -1100,7 +1098,7 @@
       '<table class="pdf-table"><colgroup><col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>' +
       '<thead><tr><th>الفرع</th><th class="num">مباع</th><th class="num">رصيد</th><th class="num">يحتاج طلبًا فوريًا</th></tr></thead>' +
       '<tbody>' + branchRowsHtml + '</tbody></table>' +
-      '<p class="pdf-footer">الصفحات التالية: تقرير تفصيلي مستقل لكل فرع، مرتب حسب المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
+      '<p class="pdf-footer">الصفحات التالية: تقرير تفصيلي مستقل لكل فرع، مرتب تصاعديًا حسب كود المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
       '</div>';
   }
 
