@@ -1183,8 +1183,11 @@
   }
 
   function captureElementToImage(el) {
-    return html2canvas(el, { scale: 2.5, backgroundColor: '#ffffff', useCORS: true }).then(function (canvas) {
-      return { dataUrl: canvas.toDataURL('image/png') };
+    // JPEG at this scale/quality keeps text crisp while cutting file size by
+    // roughly two orders of magnitude vs. lossless PNG (which was ~20MB per
+    // page) — important since reports get shared over mobile data.
+    return html2canvas(el, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true }).then(function (canvas) {
+      return { dataUrl: canvas.toDataURL('image/jpeg', 0.8) };
     });
   }
 
@@ -1237,7 +1240,7 @@
           return captureElementToImage(pageEl).then(function (img) {
             root.removeChild(pageEl);
             if (i > 0) doc.addPage();
-            doc.addImage(img.dataUrl, 'PNG', 0, 0, pageWpt, pageHpt);
+            doc.addImage(img.dataUrl, 'JPEG', 0, 0, pageWpt, pageHpt);
           });
         });
       });
