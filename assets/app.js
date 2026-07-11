@@ -58,8 +58,7 @@
     dateFrom: '',
     dateTo: '',
     settings: Object.assign({}, DEFAULT_SETTINGS),
-    supplierAliasText: '',
-    classificationSupplierExclusions: [] // [{status:'critical', code:'0666'}, ...] — hide a supplier from one classification only, everywhere else unaffected
+    supplierAliasText: ''
   };
 
   var STATUS_META = {
@@ -133,35 +132,6 @@
   function resolveSupplierCode(code) {
     if (!code) return code;
     return supplierAliasMap[code] || code;
-  }
-
-  // ---------------------------------------------------------------------
-  // Per-classification supplier suppression — "استبعاد مورد من هذا
-  // التصنيف فقط": the supplier's items stop being flagged under one
-  // specific status (e.g. لا يوجد رصيد) but stay fully visible/counted
-  // everywhere else (other classifications, KPIs, other branches' other
-  // statuses). Distinct from excludedFromReport, which hides an item
-  // from the whole report entirely.
-  // ---------------------------------------------------------------------
-  function isClassificationSuppressed(status, code) {
-    if (!code) return false;
-    var list = state.classificationSupplierExclusions || [];
-    for (var i = 0; i < list.length; i++) {
-      if (list[i].status === status && list[i].code === code) return true;
-    }
-    return false;
-  }
-
-  function addClassificationSuppression(status, code) {
-    if (!state.classificationSupplierExclusions) state.classificationSupplierExclusions = [];
-    if (isClassificationSuppressed(status, code)) return;
-    state.classificationSupplierExclusions.push({ status: status, code: code });
-  }
-
-  function removeClassificationSuppression(status, code) {
-    state.classificationSupplierExclusions = (state.classificationSupplierExclusions || []).filter(function (e) {
-      return !(e.status === status && e.code === code);
-    });
   }
 
   function blankRow() {
@@ -253,7 +223,6 @@
           // saved before — an explicitly-cleared empty string is left alone.
           var seededAlias = false;
           if (state.supplierAliasText == null) { state.supplierAliasText = DEFAULT_SUPPLIER_ALIAS_TEXT; seededAlias = true; }
-          if (!Array.isArray(state.classificationSupplierExclusions)) state.classificationSupplierExclusions = [];
           state.rows.forEach(function (r) { if (r.excludedFromReport == null) r.excludedFromReport = false; });
           rebuildSupplierAliasMap();
           if (seededAlias) save();
@@ -415,11 +384,12 @@
 
   // ---------------------------------------------------------------------
   // Exclude-by-supplier-code bar (shown under the classification chips) —
-  // typing a supplier reference code hides that supplier's items from the
-  // classification currently selected (e.g. "لا يوجد رصيد") only; they
-  // stay fully visible/counted under every other classification and in
-  // every other branch. See updateSupplierExcludeBar() for the dynamic
-  // label/enabled-state per the active chip.
+  // typing a supplier reference code moves that supplier's items to
+  // "مستبعدة من التقرير" (fully excluded from the report). Scoped to
+  // whichever chip is active: a specific classification (e.g. "لا يوجد
+  // رصيد") only excludes items currently in that classification; "الكل"
+  // excludes every item from that supplier. See updateSupplierExcludeBar()
+  // for the dynamic label/enabled-state per the active chip.
   // ---------------------------------------------------------------------
   function initSupplierExcludeBar() {
     var bar = document.getElementById('supplierExcludeBar');
@@ -430,20 +400,32 @@
 
     function run() {
       var status = bar.getAttribute('data-status');
-      if (!status || !STATUS_META[status] || status === 'excluded') {
-        statusEl.textContent = 'اختر تصنيفًا محددًا أولًا (مثل "لا يوجد رصيد").';
+      if (!status || status === 'excluded' || (status !== 'all' && !STATUS_META[status])) {
+        statusEl.textContent = 'اختر تصنيفًا أولًا (أو "الكل").';
         return;
       }
       var code = input.value.trim();
       if (!code) { statusEl.textContent = 'اكتب كود المورد أولًا.'; return; }
       var resolved = resolveSupplierCode(code);
-      var exists = state.rows.some(function (r) { return resolveSupplierCode(r.SupplierCode) === resolved; });
-      if (!exists) { statusEl.textContent = 'لا يوجد صنف بهذا الكود.'; return; }
-      addClassificationSuppression(status, resolved);
-      var name = findSupplierNameByCode(resolved);
-      statusEl.textContent = 'تم استبعاد ' + (name ? name + ' ' : '') + '(' + resolved + ') من تصنيف "' + STATUS_META[status] + '" فقط — يبقى ظاهرًا بشكل طبيعي في باقي التصنيفات.';
+
+      var matches = status === 'all'
+        ? state.rows.filter(function (r) { return !r.excludedFromReport && resolveSupplierCode(r.SupplierCode) === resolved; })
+        : computeBranchReportRows(selectedBranch, true)
+          .filter(function (d) { return d.status === status && resolveSupplierCode(d.row.SupplierCode) === resolved; })
+          .map(function (d) { return d.row; });
+
+      if (!matches.length) {
+        statusEl.textContent = status === 'all'
+          ? 'لا توجد أصناف غير مستبعدة بهذا الكود.'
+          : 'لا توجد أصناف بهذا الكود ضمن هذا التصنيف حاليًا.';
+        return;
+      }
+      matches.forEach(function (r) { r.excludedFromReport = true; });
+      var name = matches[0].SupplierName || '';
+      statusEl.textContent = 'تم استبعاد ' + matches.length + ' صنف' + (name ? (' — ' + name) : '') + ' (' + resolved + ') إلى "مستبعدة من التقرير".';
       input.value = '';
       renderDashboard();
+      renderTableBody();
       scheduleSave();
     }
 
@@ -626,14 +608,6 @@
         statusLabel = 'المخزون مناسب';
       }
 
-      // A supplier suppressed from this specific classification stops being
-      // flagged here (falls back to "ok") but stays fully visible/counted
-      // under every other classification and in every other branch.
-      if (status !== 'excluded' && isClassificationSuppressed(status, resolveSupplierCode(r.SupplierCode))) {
-        status = 'ok';
-        statusLabel = 'المخزون مناسب';
-      }
-
       return {
         row: r, soldHere: soldHere, soldElsewhere: soldElsewhere, balanceHere: balanceHere,
         status: status, statusLabel: statusLabel
@@ -811,49 +785,26 @@
     updateSupplierExcludeBar(statusFilter);
   }
 
-  function findSupplierNameByCode(resolvedCode) {
-    for (var i = 0; i < state.rows.length; i++) {
-      if (resolveSupplierCode(state.rows[i].SupplierCode) === resolvedCode) return state.rows[i].SupplierName || '';
-    }
-    return '';
-  }
-
   function updateSupplierExcludeBar(status) {
     var bar = document.getElementById('supplierExcludeBar');
     var label = document.getElementById('supplierExcludeLabel');
     var input = document.getElementById('supplierExcludeInput');
     var btn = document.getElementById('btnSupplierExclude');
-    var statusEl = document.getElementById('supplierExcludeStatus');
-    var tagsEl = document.getElementById('supplierExcludeTags');
     if (!bar) return;
 
-    var eligible = !!(status && STATUS_META[status] && status !== 'excluded');
+    var eligible = !!(status && (status === 'all' || (STATUS_META[status] && status !== 'excluded')));
     bar.classList.toggle('disabled', !eligible);
     input.disabled = !eligible;
     btn.disabled = !eligible;
     bar.setAttribute('data-status', eligible ? status : '');
-    label.textContent = eligible
-      ? 'استبعاد مورد من تصنيف "' + STATUS_META[status] + '" فقط — اكتب كود المورد:'
-      : 'اختر تصنيفًا محددًا (غير "الكل" أو "مستبعدة من التقرير") من الأعلى لاستبعاد مورد منه فقط.';
-
-    if (!eligible) { tagsEl.innerHTML = ''; return; }
-
-    var list = (state.classificationSupplierExclusions || []).filter(function (e) { return e.status === status; });
-    tagsEl.innerHTML = list.map(function (e) {
-      var name = findSupplierNameByCode(e.code);
-      var text = (name ? name + ' ' : '') + '(' + e.code + ')';
-      return '<span class="supplier-exclude-tag">' + escapeAttr(text) +
-        '<button type="button" data-remove-status="' + escapeAttr(e.status) + '" data-remove-code="' + escapeAttr(e.code) + '" title="إلغاء الاستبعاد">✕</button></span>';
-    }).join('');
+    label.textContent = !eligible
+      ? 'لا يوجد ما يُستبعد ضمن "مستبعدة من التقرير" — اختر تصنيفًا آخر من الأعلى.'
+      : status === 'all'
+        ? 'استبعاد مورد بالكامل من التقرير — اكتب كود المورد:'
+        : 'استبعاد مورد من تصنيف "' + STATUS_META[status] + '" فقط (تنتقل أصنافه إلى "مستبعدة من التقرير") — اكتب كود المورد:';
   }
 
   document.addEventListener('click', function (e) {
-    if (e.target.matches('.supplier-exclude-tag button')) {
-      removeClassificationSuppression(e.target.getAttribute('data-remove-status'), e.target.getAttribute('data-remove-code'));
-      renderDashboard();
-      scheduleSave();
-      return;
-    }
     if (e.target.matches('.chip-filter')) {
       statusFilter = e.target.getAttribute('data-filter');
       renderBranchReportTable();
@@ -948,7 +899,7 @@
   document.getElementById('btnReset').addEventListener('click', function () {
     if (confirm('سيتم مسح كل البيانات الحالية نهائيًا من هذا المتصفح. متابعة؟')) {
       try { localStorage.removeItem(STORAGE_KEY); } catch (e) { console.warn('storage clear failed', e); }
-      state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS), supplierAliasText: DEFAULT_SUPPLIER_ALIAS_TEXT, classificationSupplierExclusions: [] };
+      state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS), supplierAliasText: DEFAULT_SUPPLIER_ALIAS_TEXT };
       rebuildSupplierAliasMap();
       document.getElementById('supplierAliasInput').value = state.supplierAliasText;
       updateSupplierMergeStatus();
