@@ -386,7 +386,7 @@ table#dataTable tfoot td {
 }
 .pdf-page table.pdf-table td.num, .pdf-page table.pdf-table th.num { text-align: center; }
 .pdf-page table.pdf-table tr:nth-child(even) td { background: #f7f7f5; }
-.pdf-page .pdf-supplier-inline { color: #777; font-size: 8.5px; }
+.pdf-page table.pdf-table td.pdf-supplier-cell { color: #555; font-size: 9px; }
 .pdf-page .pdf-status { font-size: 9px; padding: 2px 5px; border-radius: 999px; display: inline-block; white-space: normal; line-height: 1.35; }
 .pdf-page .pdf-status.critical { background: #fbe2e2; color: #a12727; }
 .pdf-page .pdf-status.warning { background: #fdedcf; color: #8a6100; }

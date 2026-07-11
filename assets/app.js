@@ -1034,22 +1034,21 @@
     return '<span class="pdf-status ' + status + '">' + escapeAttr(label) + '</span>';
   }
 
-  function pdfSupplierLine(r) {
+  function pdfSupplierText(r) {
     if (!r.SupplierName) return '';
     var code = resolveSupplierCode(r.SupplierCode);
-    var text = r.SupplierName + (code ? ' (' + code + ')' : '');
-    return ' <span class="pdf-supplier-inline">— ' + escapeAttr(text) + '</span>';
+    return r.SupplierName + (code ? ' (' + code + ')' : '');
   }
 
   function pdfColgroupHtml() {
     return '<colgroup>' +
-      '<col style="width:27%"><col style="width:11%"><col style="width:13%"><col style="width:15%"><col style="width:12%"><col style="width:22%">' +
+      '<col style="width:22%"><col style="width:15%"><col style="width:10%"><col style="width:12%"><col style="width:14%"><col style="width:11%"><col style="width:16%">' +
       '</colgroup>';
   }
 
   function pdfTableHeadHtml(branchName) {
     return '<thead><tr>' +
-      '<th>الصنف / الموديل</th><th class="num">السعر</th><th class="num">مبيعات ' + branchName + '</th>' +
+      '<th>الصنف / الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + branchName + '</th>' +
       '<th class="num">مبيعات باقي الفروع</th><th class="num">الرصيد الحالي</th><th>الحالة</th>' +
       '</tr></thead>';
   }
@@ -1058,7 +1057,8 @@
     var r = d.row;
     var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
     return '<tr>' +
-      '<td>' + desc + pdfSupplierLine(r) + '</td>' +
+      '<td>' + desc + '</td>' +
+      '<td class="pdf-supplier-cell">' + escapeAttr(pdfSupplierText(r)) + '</td>' +
       '<td class="num">' + fmtPrice(r.UnitPrice) + '</td>' +
       '<td class="num">' + d.soldHere + '</td>' +
       '<td class="num">' + d.soldElsewhere + '</td>' +
