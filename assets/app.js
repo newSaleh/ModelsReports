@@ -1030,7 +1030,21 @@
 
   function fmtPrice(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
-  function pdfStatusBadge(status, label) {
+  // Short one-line labels for the PDF status badge — the on-screen table
+  // keeps the longer, more explanatory statusLabel text; the PDF badge
+  // just needs the classification name to stay within its column without
+  // wrapping (the action, e.g. "اطلب الآن", is implied by the column itself).
+  var PDF_STATUS_LABELS = {
+    critical: 'لا يوجد رصيد',
+    warning: 'رصيد منخفض',
+    opportunity: 'فرصة جديدة',
+    surplus: 'فائض في المخزون',
+    ok: 'المخزون مناسب',
+    excluded: 'مستبعد'
+  };
+
+  function pdfStatusBadge(status) {
+    var label = PDF_STATUS_LABELS[status] || status;
     return '<span class="pdf-status ' + status + '">' + escapeAttr(label) + '</span>';
   }
 
@@ -1042,7 +1056,7 @@
 
   function pdfColgroupHtml() {
     return '<colgroup>' +
-      '<col style="width:22%"><col style="width:15%"><col style="width:10%"><col style="width:12%"><col style="width:14%"><col style="width:11%"><col style="width:16%">' +
+      '<col style="width:22%"><col style="width:27%"><col style="width:8%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:15%">' +
       '</colgroup>';
   }
 
@@ -1063,7 +1077,7 @@
       '<td class="num">' + d.soldHere + '</td>' +
       '<td class="num">' + d.soldElsewhere + '</td>' +
       '<td class="num">' + d.balanceHere + '</td>' +
-      '<td>' + pdfStatusBadge(d.status, d.statusLabel) + '</td>' +
+      '<td>' + pdfStatusBadge(d.status) + '</td>' +
       '</tr>';
   }
 
