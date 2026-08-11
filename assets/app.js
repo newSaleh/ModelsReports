@@ -32,17 +32,9 @@
     maxBalance: 50               // current balance above this -> flagged as overstock/surplus
   };
 
-  // Default supplier-code merge list (plain reference numbers only, no
-  // supplier names or business data) — pre-seeded so it works out of the
-  // box; still fully editable/overridable from the "🔗 دمج أكواد الموردين" panel.
-  var DEFAULT_SUPPLIER_ALIAS_TEXT = [
-    '0180,0252', '0183,0284', '0182,0271', '0160,0202', '0137,0240',
-    '0181,0203', '0158,0246', '0145,0253', '0117,0251', '0115,0201',
-    '0198,0434', '0317,0459', '0310,0430', '0103,0218', '0306,0416',
-    '0309,0444', '0302,0436', '0104,0221', '0318,0230', '0106,0247',
-    '0165,0428', '0319,0447', '0161,0401', '0178,0293', '0184,0297',
-    '0179,0407', '0159,0402', '0108,0299', '0666,0418', '0666,0999'
-  ].join('\n');
+  // Default supplier-code merge list — empty; the user configures this
+  // themselves from the "🔗 دمج أكواد الموردين" panel, saved to their browser.
+  var DEFAULT_SUPPLIER_ALIAS_TEXT = '';
 
   function branchField(code, suffix) { return code + suffix; }
   function branchByCode(code) {
