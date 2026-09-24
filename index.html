@@ -33,10 +33,10 @@
 
 <nav class="toolbar">
   <div class="toolbar-group">
-    <button id="btnImport" class="btn btn-secondary" title="استيراد ملف Excel أسبوعي">
+    <button id="btnImport" class="btn btn-secondary" title="استيراد ملف واحد (أسبوع) أو عدة ملفات معًا (كل ملف = يوم، تُدمج تلقائيًا: المبيعات تُجمع وأحدث يوم هو مصدر الرصيد)">
       <span class="icon">📂</span> استيراد Excel
     </button>
-    <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" multiple hidden>
     <button id="btnTemplate" class="btn btn-ghost" title="تنزيل نموذج فارغ بنفس الأعمدة">نموذج فارغ</button>
     <button id="btnAddRow" class="btn btn-ghost">+ إضافة صنف</button>
   </div>
@@ -168,6 +168,6 @@
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="vendor/html2canvas.min.js"></script>
 <script src="vendor/noto-naskh-arabic-font.js"></script>
-<script src="assets/app.js?v=16"></script>
+<script src="assets/app.js?v=18"></script>
 </body>
 </html>

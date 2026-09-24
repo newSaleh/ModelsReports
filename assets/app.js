@@ -298,16 +298,59 @@
   }
 
   // ---------------------------------------------------------------------
-  // Persistence
+  // Persistence — IndexedDB, not localStorage. A full catalog import (tens
+  // of thousands of rows, e.g. merging several daily files) easily exceeds
+  // localStorage's ~5-10MB per-origin quota, which fails the save silently
+  // for large datasets. IndexedDB's quota is far larger (a share of free
+  // disk space). Still entirely local to this browser — nothing changes
+  // about where the data lives, only how much of it fits.
   // ---------------------------------------------------------------------
+  var IDB_NAME = 'modelsReportDB';
+  var IDB_STORE = 'kv';
+  var idbPromise = null;
+
+  function idbOpen() {
+    if (idbPromise) return idbPromise;
+    idbPromise = new Promise(function (resolve, reject) {
+      if (!window.indexedDB) { reject(new Error('indexedDB unavailable')); return; }
+      var req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = function () {
+        if (!req.result.objectStoreNames.contains(IDB_STORE)) req.result.createObjectStore(IDB_STORE);
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+    return idbPromise;
+  }
+
+  function idbGet(key) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+        req.onsuccess = function () { resolve(req.result); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+
+  function idbSet(key, value) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(IDB_STORE, 'readwrite');
+        tx.objectStore(IDB_STORE).put(value, key);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+
   function save() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    idbSet(STORAGE_KEY, state).then(function () {
       flashSaved(true);
-    } catch (e) {
+    }).catch(function (e) {
       console.warn('save failed', e);
       flashSaved(false);
-    }
+    });
   }
 
   var saveTimer = null;
@@ -316,17 +359,15 @@
     saveTimer = setTimeout(save, 300);
   }
 
-  // Verifies localStorage actually round-trips a value (some browsers accept
-  // writes silently in restricted modes — private browsing, storage blocked
-  // by policy — without throwing, but never persist them).
-  function isStorageWorking() {
-    try {
-      var testKey = '__storageTest__';
-      localStorage.setItem(testKey, '1');
-      var ok = localStorage.getItem(testKey) === '1';
-      localStorage.removeItem(testKey);
-      return ok;
-    } catch (e) { return false; }
+  // Verifies IndexedDB actually round-trips a value. Runs in parallel with
+  // load() at boot (not awaited) so a broken store (private/locked-down
+  // browsing modes) surfaces the warning banner without delaying render.
+  function checkStorageWorking() {
+    if (!window.indexedDB) return Promise.resolve(false);
+    return idbSet('__storageTest__', 1)
+      .then(function () { return idbGet('__storageTest__'); })
+      .then(function (v) { return v === 1; })
+      .catch(function () { return false; });
   }
 
   function flashSaved(ok) {
@@ -343,27 +384,20 @@
     flashSaved._t = setTimeout(function () { el.classList.remove('show'); }, ok ? 1200 : 5000);
   }
 
-  function load() {
-    var raw = null;
-    try { raw = localStorage.getItem(STORAGE_KEY); } catch (e) { console.warn('storage read failed', e); }
-    if (raw) {
-      try {
-        var parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.rows)) {
-          state = parsed;
-          state.settings = Object.assign({}, DEFAULT_SETTINGS, state.settings || {});
-          // Only seed the default merge list if this field has never been
-          // saved before — an explicitly-cleared empty string is left alone.
-          var seededAlias = false;
-          if (state.supplierAliasText == null) { state.supplierAliasText = DEFAULT_SUPPLIER_ALIAS_TEXT; seededAlias = true; }
-          state.rows.forEach(function (r) { if (r.excludedFromReport == null) r.excludedFromReport = false; });
-          rebuildSupplierAliasMap();
-          if (seededAlias) save();
-          return;
-        }
-      } catch (e) { console.warn('bad saved state', e); }
-    }
-    // No data yet: start empty. The user imports their own weekly Excel file
+  function applyLoadedState(parsed) {
+    state = parsed;
+    state.settings = Object.assign({}, DEFAULT_SETTINGS, state.settings || {});
+    // Only seed the default merge list if this field has never been
+    // saved before — an explicitly-cleared empty string is left alone.
+    var seededAlias = false;
+    if (state.supplierAliasText == null) { state.supplierAliasText = DEFAULT_SUPPLIER_ALIAS_TEXT; seededAlias = true; }
+    state.rows.forEach(function (r) { if (r.excludedFromReport == null) r.excludedFromReport = false; });
+    rebuildSupplierAliasMap();
+    if (seededAlias) save();
+  }
+
+  function seedEmptyState() {
+    // No data yet: start empty. The user imports their own Excel file(s)
     // (no sample business data ships with this app).
     state.rows = [];
     state.dateFrom = '';
@@ -371,7 +405,35 @@
     state.settings = Object.assign({}, DEFAULT_SETTINGS);
     state.supplierAliasText = DEFAULT_SUPPLIER_ALIAS_TEXT;
     rebuildSupplierAliasMap();
-    save();
+  }
+
+  function load() {
+    return idbGet(STORAGE_KEY).then(function (fromIdb) {
+      if (fromIdb && Array.isArray(fromIdb.rows)) {
+        applyLoadedState(fromIdb);
+        return;
+      }
+      // Nothing in IndexedDB yet — check for a save from before this app
+      // switched persistence backends (localStorage) and migrate it once.
+      var legacyRaw = null;
+      try { legacyRaw = localStorage.getItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+      if (legacyRaw) {
+        try {
+          var parsed = JSON.parse(legacyRaw);
+          if (parsed && Array.isArray(parsed.rows)) {
+            applyLoadedState(parsed);
+            save();
+            try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+            return;
+          }
+        } catch (e) { console.warn('bad legacy saved state', e); }
+      }
+      seedEmptyState();
+      save();
+    }).catch(function (e) {
+      console.warn('storage read failed', e);
+      seedEmptyState();
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -1039,59 +1101,174 @@
 
   document.getElementById('btnReset').addEventListener('click', function () {
     if (confirm('سيتم مسح كل البيانات الحالية نهائيًا من هذا المتصفح. متابعة؟')) {
-      try { localStorage.removeItem(STORAGE_KEY); } catch (e) { console.warn('storage clear failed', e); }
+      try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* legacy key, best-effort */ }
       state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS), supplierAliasText: DEFAULT_SUPPLIER_ALIAS_TEXT };
       rebuildSupplierAliasMap();
       document.getElementById('supplierAliasInput').value = state.supplierAliasText;
       updateSupplierMergeStatus();
       renderAll();
+      scheduleSave();
     }
   });
 
   // ---------------------------------------------------------------------
-  // Excel import
+  // Excel import — accepts either one file (a week/period already totaled,
+  // the original workflow) or several files selected together, each
+  // representing one day's full catalog snapshot (sales that day + that
+  // day's branch balances). Multi-file imports are merged: sold quantities
+  // are summed across every day, but each branch's balance is taken only
+  // from the most recent day's file (its stock is the only one still
+  // current) — never summed or averaged.
   // ---------------------------------------------------------------------
+  function normalizeHeader(h) {
+    return String(h || '').trim().toLowerCase().replace(/[\s_]+/g, '');
+  }
+
+  function buildHeaderKeyMap(sampleRow) {
+    var map = {};
+    Object.keys(sampleRow || {}).forEach(function (k) { map[normalizeHeader(k)] = k; });
+    return map;
+  }
+
+  function getField(row, keyMap, canonicalKey) {
+    var actualKey = keyMap[normalizeHeader(canonicalKey)];
+    return actualKey === undefined ? undefined : row[actualKey];
+  }
+
+  // Parses one already-loaded sheet (as sheet_to_json output) into this
+  // app's internal row shape, matching column headers case/spacing-
+  // insensitively (so "Stockcode", "StockCode" and "stock_code" all map to
+  // the same field) since daily export files aren't always cased the same.
+  function parseSheetRows(json) {
+    if (!json.length) return [];
+    var keyMap = buildHeaderKeyMap(json[0]);
+    return json.filter(function (r) {
+      return getField(r, keyMap, 'ModelCode') || getField(r, keyMap, 'StockCode');
+    }).map(function (r) {
+      var row = blankRow();
+      TEXT_FIELDS.forEach(function (f) {
+        var v = getField(r, keyMap, f.key);
+        if (v != null) row[f.key] = String(v).trim();
+      });
+      row.UnitPrice = Number(getField(r, keyMap, 'UnitPrice')) || 0;
+      BRANCHES.forEach(function (b) {
+        row[branchField(b.code, 'SoldQty')] = Number(getField(r, keyMap, branchField(b.code, 'SoldQty'))) || 0;
+        row[branchField(b.code, 'Balance')] = Number(getField(r, keyMap, branchField(b.code, 'Balance'))) || 0;
+      });
+      row.excludedFromReport = !!Number(getField(r, keyMap, 'Excluded')) || false;
+      recalcRow(row);
+      return row;
+    });
+  }
+
+  // Best-effort date extraction from a filename like
+  // "AllModelsSoldAllShowroom_23-Sep-2026.xlsx" (also handles YYYY-MM-DD
+  // and DD/MM/YYYY), used to order daily files so "most recent" is known
+  // even if the user selects/drops them out of order. Returns null if no
+  // recognizable date is found.
+  function parseDateFromFilename(name) {
+    var months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    var m = name.match(/(\d{1,2})[-_ ]([A-Za-z]{3,9})[-_ ](\d{4})/);
+    if (m) {
+      var mon = months[m[2].slice(0, 3).toLowerCase()];
+      if (mon !== undefined) return new Date(Number(m[3]), mon, Number(m[1])).getTime();
+    }
+    m = name.match(/(\d{4})[-_](\d{1,2})[-_](\d{1,2})/);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+    m = name.match(/(\d{1,2})[-_\/](\d{1,2})[-_\/](\d{4})/);
+    if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])).getTime();
+    return null;
+  }
+
+  // Merges several days' parsed rows into one dataset. Products are matched
+  // across days by StockCode (falls back to ModelCode if a row has no
+  // StockCode) since it's the most stable per-product identifier. Sold
+  // quantities accumulate across every day the product appears in; balances
+  // are overwritten only while processing the most recent day's file, so a
+  // product absent from that last file simply keeps balance 0 (no current
+  // stock data for it) rather than an average or a stale earlier figure.
+  function mergeMultiDayRows(files) {
+    var ordered = files.slice();
+    if (ordered.every(function (f) { return f.dateKey != null; })) {
+      ordered.sort(function (a, b) { return a.dateKey - b.dateKey; });
+    }
+    var latest = ordered[ordered.length - 1];
+
+    var byKey = {};
+    var order = [];
+    ordered.forEach(function (file) {
+      var isLatest = file === latest;
+      file.rows.forEach(function (r) {
+        var key = r.StockCode || r.ModelCode;
+        if (!key) return;
+        if (!byKey[key]) {
+          byKey[key] = blankRow();
+          TEXT_FIELDS.forEach(function (f) { byKey[key][f.key] = r[f.key]; });
+          byKey[key].UnitPrice = r.UnitPrice;
+          order.push(key);
+        }
+        var merged = byKey[key];
+        if (isLatest) {
+          TEXT_FIELDS.forEach(function (f) { if (r[f.key]) merged[f.key] = r[f.key]; });
+          if (r.UnitPrice) merged.UnitPrice = r.UnitPrice;
+        }
+        BRANCHES.forEach(function (b) {
+          merged[branchField(b.code, 'SoldQty')] += r[branchField(b.code, 'SoldQty')];
+          if (isLatest) merged[branchField(b.code, 'Balance')] = r[branchField(b.code, 'Balance')];
+        });
+      });
+    });
+    return order.map(function (k) { recalcRow(byKey[k]); return byKey[k]; });
+  }
+
   document.getElementById('btnImport').addEventListener('click', function () {
     document.getElementById('fileInput').click();
   });
 
   document.getElementById('fileInput').addEventListener('change', function (e) {
-    var file = e.target.files[0];
-    if (!file) return;
-    var reader = new FileReader();
-    reader.onload = function (evt) {
-      try {
-        var data = new Uint8Array(evt.target.result);
-        var wb = XLSX.read(data, { type: 'array' });
-        var sheet = wb.Sheets[wb.SheetNames[0]];
-        var json = XLSX.utils.sheet_to_json(sheet, { defval: 0 });
-        var rows = json.filter(function (r) { return r.ModelCode || r.StockCode; }).map(function (r) {
-          var row = blankRow();
-          TEXT_FIELDS.forEach(function (f) { if (r[f.key] != null) row[f.key] = r[f.key]; });
-          row.UnitPrice = Number(r.UnitPrice) || 0;
-          BRANCHES.forEach(function (b) {
-            row[branchField(b.code, 'SoldQty')] = Number(r[branchField(b.code, 'SoldQty')]) || 0;
-            row[branchField(b.code, 'Balance')] = Number(r[branchField(b.code, 'Balance')]) || 0;
-          });
-          row.excludedFromReport = !!Number(r.Excluded) || false;
-          recalcRow(row);
-          return row;
-        });
-        if (!rows.length) {
-          alert('لم يتم العثور على بيانات صالحة في هذا الملف. تأكد من أن الأعمدة مطابقة للنموذج.');
-          return;
-        }
-        state.rows = rows;
-        renderAll();
-        scheduleSave();
-      } catch (err) {
-        console.error(err);
-        alert('تعذّرت قراءة الملف. تأكد من أنه بصيغة Excel صحيحة (xlsx).');
-      } finally {
-        e.target.value = '';
+    var files = Array.prototype.slice.call(e.target.files || []);
+    if (!files.length) return;
+
+    Promise.all(files.map(function (file) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function (evt) {
+          try {
+            var data = new Uint8Array(evt.target.result);
+            var wb = XLSX.read(data, { type: 'array' });
+            var sheet = wb.Sheets[wb.SheetNames[0]];
+            var json = XLSX.utils.sheet_to_json(sheet, { defval: 0 });
+            resolve({ name: file.name, dateKey: parseDateFromFilename(file.name), rows: parseSheetRows(json) });
+          } catch (err) { reject(err); }
+        };
+        reader.onerror = function () { reject(new Error('read failed: ' + file.name)); };
+        reader.readAsArrayBuffer(file);
+      });
+    })).then(function (parsedFiles) {
+      var validFiles = parsedFiles.filter(function (f) { return f.rows.length; });
+      if (!validFiles.length) {
+        alert('لم يتم العثور على بيانات صالحة في الملف/الملفات. تأكد من أن الأعمدة مطابقة للنموذج.');
+        return;
       }
-    };
-    reader.readAsArrayBuffer(file);
+      state.rows = mergeMultiDayRows(validFiles);
+      renderAll();
+      scheduleSave();
+      if (validFiles.length > 1) {
+        var missingDates = validFiles.filter(function (f) { return f.dateKey == null; }).length;
+        var msg = 'تم دمج ' + validFiles.length + ' يومًا في تقرير واحد (' + state.rows.length + ' صنفًا). ' +
+          'المبيعات مُجمَّعة عبر كل الأيام، والرصيد الحالي مأخوذ من أحدث يوم فقط.';
+        if (missingDates) {
+          msg += '\n\nتنبيه: تعذّر استنتاج التاريخ من اسم ' + missingDates + ' من الملفات، فاعتُمد ترتيب اختيارها كما هو ' +
+            '(تأكد من أن آخر ملف في القائمة هو فعلاً أحدث يوم، وإلا فالرصيد المعروض سيكون من يوم غير صحيح).';
+        }
+        alert(msg);
+      }
+    }).catch(function (err) {
+      console.error(err);
+      alert('تعذّرت قراءة أحد الملفات. تأكد من أنها بصيغة Excel صحيحة (xlsx).');
+    }).finally(function () {
+      e.target.value = '';
+    });
   });
 
   function exportColumns() {
@@ -1427,16 +1604,19 @@
     renderDashboard();
   }
 
-  if (!isStorageWorking()) {
-    var banner = document.getElementById('storageWarningBanner');
-    if (banner) banner.hidden = false;
-  }
+  checkStorageWorking().then(function (ok) {
+    if (!ok) {
+      var banner = document.getElementById('storageWarningBanner');
+      if (banner) banner.hidden = false;
+    }
+  });
 
-  load();
-  initTheme();
-  renderBranchSelect();
-  initSettingsPanel();
-  initSupplierMergePanel();
-  initSupplierExcludeBar();
-  renderAll();
+  load().then(function () {
+    initTheme();
+    renderBranchSelect();
+    initSettingsPanel();
+    initSupplierMergePanel();
+    initSupplierExcludeBar();
+    renderAll();
+  });
 })();
