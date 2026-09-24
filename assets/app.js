@@ -144,6 +144,7 @@
   };
 
   var STATUS_META = {
+    checkStock: '🟣 لازم تشييك المخزون',
     critical: '🔴 لا يوجد رصيد',
     warning: '🟡 رصيد منخفض',
     opportunity: '🟢 فرصة جديدة',
@@ -763,10 +764,46 @@
     return max;
   }
 
+  var TAHLIA_BRANCH_CODE = '803';
+
+  // At فرع التحلية specifically, some suppliers with two reference codes
+  // record ALL of Tahlia's real sales/stock under their OTHER code (the
+  // "primary" one for that branch), leaving this code's own Tahlia balance
+  // at 0 or negative. Finds that sibling row for the same physical model —
+  // matched by ModelCode (not StockCode, which is itself prefixed by the
+  // supplier code and so differs between the two) within the same merged
+  // supplier group, under a different member code.
+  function buildModelGroupIndex(rows) {
+    var index = {};
+    rows.forEach(function (r) {
+      var norm = normalizeSupplierCode(r.SupplierCode);
+      var root = supplierGroupRootOf[norm] || norm;
+      var known = supplierGroupKnownCodes[root] || [norm];
+      if (known.length < 2) return; // only relevant for multi-code groups
+      var mc = String(r.ModelCode || '').trim().toUpperCase();
+      if (!mc) return;
+      var key = root + '|' + mc;
+      (index[key] = index[key] || []).push(r);
+    });
+    return index;
+  }
+
+  function findSiblingCodeRow(r, modelGroupIndex) {
+    var norm = normalizeSupplierCode(r.SupplierCode);
+    var root = supplierGroupRootOf[norm] || norm;
+    var mc = String(r.ModelCode || '').trim().toUpperCase();
+    var candidates = modelGroupIndex[root + '|' + mc] || [];
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i] !== r && normalizeSupplierCode(candidates[i].SupplierCode) !== norm) return candidates[i];
+    }
+    return null;
+  }
+
   function computeBranchReportRows(branchCode, includeExcluded) {
     var rows = includeExcluded ? state.rows : reportableRows();
     var settings = state.settings;
     var numDays = state.importedDayCount || 1;
+    var modelGroupIndex = branchCode === TAHLIA_BRANCH_CODE ? buildModelGroupIndex(rows) : null;
     return rows.map(function (r) {
       var soldHere = Number(r[branchField(branchCode, 'SoldQty')]) || 0;
       var balanceHere = Number(r[branchField(branchCode, 'Balance')]) || 0;
@@ -786,18 +823,22 @@
       var daysOfStockLeft = avgDailySoldHere > 0 ? balanceHere / avgDailySoldHere : Infinity;
       var runningLow = daysOfStockLeft <= settings.lowStockDaysThreshold;
 
-      // A negative balance sometimes means this model's sales/stock actually
-      // landed under the supplier's OTHER reference code instead of this one
-      // (seen especially at فرع التحلية) — flag it for manual verification
-      // rather than silently guessing which code holds the real numbers.
+      // Negative balance handling — differs by branch:
+      //  - فرع التحلية (803): the OTHER code in this supplier's group is
+      //    the one that actually carries Tahlia's real numbers. If that
+      //    sibling row exists, this row defers to it entirely (excluded
+      //    below) rather than showing its own wrong number. If no sibling
+      //    is found at all, this row stays — with a note — since it's all
+      //    the data there is.
+      //  - Riyadh branches (701/706/707/711): left exactly as-is, no note;
+      //    a negative number there isn't a code-attribution problem.
       var negativeBalanceNote = null;
-      if (balanceHere < 0) {
-        var normCode = normalizeSupplierCode(r.SupplierCode);
-        var root = supplierGroupRootOf[normCode] || normCode;
-        var known = supplierGroupKnownCodes[root] || [normCode];
-        if (known.length > 1) {
-          var otherCodes = known.filter(function (c) { return c !== normCode; }).map(formatCodeForDisplay);
-          negativeBalanceNote = 'الرصيد سالب — تحقق من كود المورد الآخر (' + otherCodes.join('/') + ')';
+      var deferToSiblingCode = false;
+      if (balanceHere < 0 && branchCode === TAHLIA_BRANCH_CODE) {
+        if (findSiblingCodeRow(r, modelGroupIndex)) {
+          deferToSiblingCode = true;
+        } else {
+          negativeBalanceNote = 'لم يُعثر على هذا الموديل بكود مورد آخر لنفس المورد ضمن الملفات المستوردة';
         }
       }
 
@@ -805,6 +846,17 @@
       if (r.excludedFromReport) {
         status = 'excluded';
         statusLabel = 'مستبعد من التقرير';
+      } else if (deferToSiblingCode) {
+        // Not shown here at all — the sibling row (same model, other code)
+        // already reports Tahlia's real numbers on its own.
+        status = 'deferredToSibling';
+        statusLabel = 'الرصيد الحقيقي مسجل بكود المورد الآخر لهذا الموديل';
+      } else if (balanceHere < 0) {
+        // Any negative balance we're NOT deferring on is untrustworthy —
+        // don't pretend to classify it as critical/warning, ask for a
+        // manual count instead.
+        status = 'checkStock';
+        statusLabel = 'لازم تشييك المخزون';
       } else if (soldElsewhere >= settings.opportunityMinTotalSold && soldHere === 0 && balanceHere === 0) {
         // Checked before the generic reorder case below: a model that has
         // never been carried in this branch at all is a "new opportunity"
@@ -813,7 +865,7 @@
         status = 'opportunity';
         statusLabel = 'موديل ناجح — غير متوفر لديك';
       } else if (sellingWell && runningLow) {
-        if (balanceHere <= 0) {
+        if (balanceHere === 0) {
           status = 'critical';
           statusLabel = 'لا يوجد رصيد — اطلب الآن';
         } else {
@@ -835,7 +887,7 @@
         topOtherBranchName: topOther.qty > 0 ? topOther.name : null, topOtherBranchQty: topOther.qty
       };
     }).sort(function (a, b) {
-      var order = { critical: 0, warning: 1, opportunity: 2, surplus: 3, ok: 4, excluded: 5 };
+      var order = { checkStock: 0, critical: 1, warning: 2, opportunity: 3, surplus: 4, ok: 5, excluded: 6, deferredToSibling: 7 };
       if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
       return (b.soldHere + b.soldElsewhere) - (a.soldHere + a.soldElsewhere);
     });
@@ -1042,7 +1094,7 @@
     var minPrice = state.minPriceFilter;
     var minSoldPerBranch = Number(state.minSoldPerBranchFilter) || 0;
     var data = computeBranchReportRows(branchCode, false).filter(function (d) {
-      if (d.status !== 'critical' && d.status !== 'warning' && d.status !== 'opportunity') return false;
+      if (['critical', 'warning', 'opportunity', 'checkStock'].indexOf(d.status) === -1) return false;
       if (supplierFilterActive && !selectedSupplierRoots[resolveSupplierCode(d.row.SupplierCode)]) return false;
       if (categoryFilterActive && excludedCategories[(d.row.StockGroupName || '').trim()]) return false;
       if (permExcluded[resolveSupplierCode(d.row.SupplierCode)]) return false;
@@ -1070,9 +1122,9 @@
   }
 
   function buildReportCardHtml(b, data) {
-    var counts = { critical: 0, warning: 0, opportunity: 0 };
+    var counts = { checkStock: 0, critical: 0, warning: 0, opportunity: 0 };
     data.forEach(function (d) { counts[d.status]++; });
-    var summary = '🔴 ' + counts.critical + ' لا يوجد رصيد &nbsp;·&nbsp; 🟡 ' + counts.warning + ' رصيد منخفض &nbsp;·&nbsp; 🟢 ' + counts.opportunity + ' فرصة جديدة';
+    var summary = '🟣 ' + counts.checkStock + ' لازم تشييك المخزون &nbsp;·&nbsp; 🔴 ' + counts.critical + ' لا يوجد رصيد &nbsp;·&nbsp; 🟡 ' + counts.warning + ' رصيد منخفض &nbsp;·&nbsp; 🟢 ' + counts.opportunity + ' فرصة جديدة';
 
     var rowsHtml;
     if (!data.length) {
@@ -1080,7 +1132,7 @@
     } else {
       rowsHtml = data.map(function (d, i) {
         var r = d.row;
-        var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
+        var desc = escapeAttr(r.StockGroupName || '') + '<br>' + escapeAttr(r.ModelCode || '');
         if (d.negativeBalanceNote) desc += '<br><span class="report-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
         var price = (Number(r.UnitPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         return '<tr>' +
@@ -1506,6 +1558,7 @@
   // Short one-line labels — only critical/warning/opportunity ever reach
   // print (see branchReportData), so that's all this needs to cover.
   var PDF_STATUS_LABELS = {
+    checkStock: 'لازم تشييك المخزون',
     critical: 'خلص',
     warning: 'باقي شوي',
     opportunity: 'ما نزل'
@@ -1522,7 +1575,7 @@
   function buildPrintRowsHtml(data) {
     return data.map(function (d, i) {
       var r = d.row;
-      var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
+      var desc = escapeAttr(r.StockGroupName || '') + '<br>' + escapeAttr(r.ModelCode || '');
       if (d.negativeBalanceNote) desc += '<br><span class="p-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
       var topOtherText = d.topOtherBranchName ? (d.topOtherBranchName + ' (' + d.topOtherBranchQty + ' حبة)') : '—';
       return '<tr>' +

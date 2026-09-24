@@ -272,6 +272,9 @@ main { padding: 20px 24px 60px; max-width: 1400px; margin: 0 auto; }
 .status-label.surplus { background: rgba(42,120,214,0.15); color: var(--series-1); }
 .status-label.ok { background: rgba(137,135,129,0.15); color: var(--text-secondary); }
 .status-label.excluded { background: rgba(137,135,129,0.15); color: var(--text-muted); }
+.status-label.checkStock { background: rgba(155,45,180,0.15); color: #7a1fa2; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .status-label.checkStock { color: #d18aec; } }
+:root[data-theme="dark"] .status-label.checkStock { color: #d18aec; }
 .empty-state { color: var(--text-muted); font-size: 0.85rem; padding: 20px; text-align: center; }
 
 .row-action-btn {
