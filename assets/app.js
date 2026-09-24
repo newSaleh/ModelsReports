@@ -1579,7 +1579,7 @@
       var topOtherText = d.topOtherBranchName ? (d.topOtherBranchName + ' (' + d.topOtherBranchQty + ' حبة)') : '—';
       return '<tr>' +
         '<td class="p-td-num">' + (i + 1) + '</td>' +
-        '<td>' + desc + '</td>' +
+        '<td class="p-desc-cell">' + desc + '</td>' +
         '<td>' + pdfSupplierCellHtml(r) + '</td>' +
         '<td class="p-td-num">' + fmtPrice(r.UnitPrice) + '</td>' +
         '<td class="p-td-num">' + d.soldHere + '</td>' +
@@ -1600,7 +1600,7 @@
       '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
         ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
       '<table class="p-table">' +
-        '<colgroup><col style="width:4%"><col style="width:17%"><col style="width:19%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:10%"><col style="width:12%"><col style="width:13%"></colgroup>' +
+        '<colgroup><col style="width:4%"><col style="width:15%"><col style="width:19%"><col style="width:6%"><col style="width:8%"><col style="width:6%"><col style="width:9%"><col style="width:15%"><col style="width:18%"></colgroup>' +
         '<thead><tr><th>#</th><th>الصنف / الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
         '<th class="p-td-num">إجمالي باقي الفروع</th><th>أقوى فرع من الفروع الثانية</th><th>الحالة</th></tr></thead>' +
         '<tbody>' + rowsHtml + '</tbody>' +
@@ -1615,7 +1615,10 @@
     if (!entry) return;
     var printArea = document.getElementById('printArea');
     printArea.innerHTML = buildBranchPrintHtml(entry.branch, entry.data);
-    dynamicPrintStyle.textContent = '@media print { @page { size: A4 portrait; margin: 10mm; } }';
+    // Explicit physical dimensions (not the "A4" keyword) so the page size
+    // is unambiguous regardless of the browser/OS's regional default paper
+    // size (which can otherwise silently win over a size keyword).
+    dynamicPrintStyle.textContent = '@media print { @page { size: 210mm 297mm; margin: 10mm; } }';
 
     var previousTitle = document.title;
     document.title = 'تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '');
