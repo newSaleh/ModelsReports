@@ -23,6 +23,13 @@
   var STORAGE_KEY = 'modelsReport_v2';
   var THEME_KEY = 'modelsReportTheme';
 
+  // Bumped on every shipped change, alongside the ?v= cache-busting query
+  // param on this file and style.css in index.html — shown in the footer
+  // so it's easy to confirm a browser is actually running the latest build
+  // (a stale cached copy would show an older number here) without needing
+  // dev tools.
+  var APP_VERSION = 'app v32 / style v21 — 24/09/2026';
+
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
   var DEFAULT_SETTINGS = {
@@ -1669,6 +1676,9 @@
     renderTableIfActive();
     refreshFilterDirectories();
   }
+
+  var versionEl = document.getElementById('appVersion');
+  if (versionEl) versionEl.textContent = APP_VERSION;
 
   checkStorageWorking().then(function (ok) {
     if (!ok) {
