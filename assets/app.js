@@ -748,6 +748,19 @@
     return top;
   }
 
+  // Highest quantity this model sold in any single branch (not summed) —
+  // used by the minimum-sold filter: a model only needs to have proven
+  // itself in ONE branch to qualify for inclusion everywhere it otherwise
+  // needs attention, not necessarily the branch of the report it's on.
+  function maxSoldAnyBranch(r) {
+    var max = 0;
+    BRANCHES.forEach(function (b) {
+      var qty = Number(r[branchField(b.code, 'SoldQty')]) || 0;
+      if (qty > max) max = qty;
+    });
+    return max;
+  }
+
   function computeBranchReportRows(branchCode, includeExcluded) {
     var rows = includeExcluded ? state.rows : reportableRows();
     var settings = state.settings;
@@ -1013,10 +1026,10 @@
       if (categoryFilterActive && excludedCategories[(d.row.StockGroupName || '').trim()]) return false;
       if (permExcluded[resolveSupplierCode(d.row.SupplierCode)]) return false;
       if (minPrice != null && (Number(d.row.UnitPrice) || 0) < minPrice) return false;
-      // Opportunity items are by definition never sold in this branch
-      // (soldHere is always 0), so this threshold doesn't apply to them —
-      // otherwise it would silently wipe out the whole "فرصة جديدة" section.
-      if (minSoldPerBranch > 0 && d.status !== 'opportunity' && d.soldHere < minSoldPerBranch) return false;
+      // Scoped to ANY branch, not this report's own branch — a model that
+      // proved itself somewhere still qualifies here, as long as this
+      // branch's own status (checked above) says it needs attention.
+      if (minSoldPerBranch > 0 && maxSoldAnyBranch(d.row) < minSoldPerBranch) return false;
       return true;
     });
     // Ascending by (merged) supplier code, then descending by quantity sold
@@ -1467,9 +1480,9 @@
   // Short one-line labels — only critical/warning/opportunity ever reach
   // print (see branchReportData), so that's all this needs to cover.
   var PDF_STATUS_LABELS = {
-    critical: 'لا يوجد رصيد',
-    warning: 'رصيد منخفض',
-    opportunity: 'فرصة جديدة'
+    critical: 'خلص',
+    warning: 'باقي شوي',
+    opportunity: 'ما نزل'
   };
 
   function pdfSupplierCellHtml(r) {
@@ -1484,7 +1497,7 @@
     return data.map(function (d) {
       var r = d.row;
       var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
-      var topOtherText = d.topOtherBranchName ? (d.topOtherBranchName + ' (' + d.topOtherBranchQty + ')') : '—';
+      var topOtherText = d.topOtherBranchName ? (d.topOtherBranchName + ' (' + d.topOtherBranchQty + ' حبة)') : '—';
       return '<tr>' +
         '<td>' + desc + '</td>' +
         '<td>' + pdfSupplierCellHtml(r) + '</td>' +
@@ -1506,11 +1519,10 @@
       '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
         ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
-      '<p class="p-meta">مرتب تصاعديًا حسب كود المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع. يشمل فقط: لا يوجد رصيد، رصيد منخفض، فرصة جديدة.</p>' +
       '<table class="p-table">' +
         '<colgroup><col style="width:19%"><col style="width:21%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:10%"><col style="width:12%"><col style="width:13%"></colgroup>' +
         '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
-        '<th class="p-td-num">إجمالي باقي الفروع</th><th>الأكثر مبيعًا بفرع آخر</th><th>الحالة</th></tr></thead>' +
+        '<th class="p-td-num">إجمالي باقي الفروع</th><th>أقوى فرع من الفروع الثانية</th><th>الحالة</th></tr></thead>' +
         '<tbody>' + rowsHtml + '</tbody>' +
       '</table>' +
     '</div>';
