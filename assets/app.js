@@ -28,7 +28,7 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v34 / style v23 — 24/09/2026';
+  var APP_VERSION = 'app v35 / style v23 — 24/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
@@ -1638,33 +1638,15 @@
     '</div>';
   }
 
-  // One page's worth of a branch's table: title+meta only on the branch's
-  // first page, the column header always repeated, and just this chunk's
-  // rows (continuously numbered via baseIndex, not restarting per page).
-  function buildPageChunkHtml(branch, data, chunk, isFirstChunk) {
-    var slice = data.slice(chunk.start, chunk.end);
-    var rowsHtml = slice.length
-      ? buildPrintRowsHtml(slice, chunk.start)
-      : '<tr><td colspan="9" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
-    var head = isFirstChunk
-      ? '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
-        '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
-          ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>'
-      : '';
-    return '<div class="p-page">' + head +
-      '<table class="p-table">' + PDF_COLGROUP_HTML + buildPrintTheadHtml(branch.name) +
-        '<tbody>' + rowsHtml + '</tbody>' +
-      '</table>' +
-    '</div>';
-  }
 
   var PDF_PAGE_WIDTH_MM = 210, PDF_PAGE_HEIGHT_MM = 297, PDF_MARGIN_MM = 10;
   var CSS_PX_PER_MM = 96 / 25.4;
   function mmToPx(mm) { return mm * CSS_PX_PER_MM; }
 
+  var PDF_CAPTURE_SCALE = 1.5;
+
   // An off-screen (not display:none, so it still lays out/renders — just
-  // positioned off the visible page) container at the page's content
-  // width, used both to measure row heights and, per chunk, to capture.
+  // positioned off the visible page) container at the page's content width.
   function createOffscreenPageEl() {
     var el = document.createElement('div');
     el.style.position = 'fixed';
@@ -1676,29 +1658,35 @@
     return el;
   }
 
-  // Decides, for one branch, how its rows split across pages — never
-  // splitting a single row across a page boundary. Renders the branch's
-  // full table once (off-screen) purely to read real row heights, then
-  // walks rows accumulating height against one page's content height.
-  function measureBranchPageChunks(branch, data) {
-    if (!data.length) return [{ start: 0, end: 0 }];
+  // Renders a branch's FULL table (title/meta/header/every row) off-screen
+  // ONCE and reads back real layout measurements — title+header block
+  // height and each row's [top, bottom] — everything captureBranchPages
+  // needs to both decide page breaks (never splitting a row) and know
+  // exactly where to crop the single capture taken of this same content.
+  function measureBranchLayout(branch, data) {
     var container = createOffscreenPageEl();
     container.innerHTML = buildBranchPrintHtml(branch, data);
     var titleEl = container.querySelector('.p-title');
     var metaEl = container.querySelector('.p-meta');
     var thead = container.querySelector('thead');
     var rows = container.querySelectorAll('tbody tr');
+    var containerTop = container.getBoundingClientRect().top;
 
-    var pageContentHeightPx = mmToPx(PDF_PAGE_HEIGHT_MM - 2 * PDF_MARGIN_MM);
     var titleBlockHeight = (titleEl ? titleEl.getBoundingClientRect().height : 0) +
       (metaEl ? metaEl.getBoundingClientRect().height : 0) + 8; // + table margin-top
+    var headerTop = titleBlockHeight;
     var headerHeight = thead ? thead.getBoundingClientRect().height : 0;
+    var rowSpans = Array.prototype.map.call(rows, function (tr) {
+      var r = tr.getBoundingClientRect();
+      return { top: r.top - containerTop, bottom: r.bottom - containerTop };
+    });
 
+    var pageContentHeightPx = mmToPx(PDF_PAGE_HEIGHT_MM - 2 * PDF_MARGIN_MM);
     var chunks = [];
     var chunkStart = 0;
     var usedHeight = titleBlockHeight + headerHeight;
-    for (var i = 0; i < rows.length; i++) {
-      var rh = rows[i].getBoundingClientRect().height;
+    for (var i = 0; i < rowSpans.length; i++) {
+      var rh = rowSpans[i].bottom - rowSpans[i].top;
       if (i > chunkStart && usedHeight + rh > pageContentHeightPx) {
         chunks.push({ start: chunkStart, end: i });
         chunkStart = i;
@@ -1707,43 +1695,84 @@
         usedHeight += rh;
       }
     }
-    chunks.push({ start: chunkStart, end: rows.length });
+    chunks.push({ start: chunkStart, end: rowSpans.length });
 
     document.body.removeChild(container);
-    return chunks;
+    return { titleBlockHeight: titleBlockHeight, headerTop: headerTop, headerHeight: headerHeight, rowSpans: rowSpans, chunks: chunks };
   }
 
-  // Captures one page-chunk's HTML to a canvas via html2canvas (scale 1.5
-  // for good print quality without excessive file size) and cleans up its
-  // off-screen container.
-  function captureChunkCanvas(html) {
+  function cropCanvasVertical(src, yStart, yEnd) {
+    var out = document.createElement('canvas');
+    out.width = src.width;
+    out.height = Math.max(1, yEnd - yStart);
+    out.getContext('2d').drawImage(src, 0, yStart, src.width, out.height, 0, 0, src.width, out.height);
+    return out;
+  }
+
+  function stackCanvasesVertical(parts) {
+    var width = parts[0].width;
+    var totalHeight = parts.reduce(function (sum, c) { return sum + c.height; }, 0);
+    var out = document.createElement('canvas');
+    out.width = width;
+    out.height = totalHeight;
+    var ctx = out.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, width, totalHeight);
+    var y = 0;
+    parts.forEach(function (c) { ctx.drawImage(c, 0, y); y += c.height; });
+    return out;
+  }
+
+  // Renders + captures a branch's ENTIRE report exactly ONCE (the slow
+  // step — html2canvas has substantial fixed overhead per call, so doing
+  // it once per branch instead of once per PAGE is what makes exporting a
+  // multi-page report fast), then slices that single tall canvas into
+  // per-page canvases using the pixel measurements from measureBranchLayout.
+  // Continuation pages get the (separately cropped, then re-stacked) header
+  // repeated on top, since the single capture only has it once at the top.
+  function captureBranchPages(branch, data) {
+    var layout = measureBranchLayout(branch, data);
     var container = createOffscreenPageEl();
-    container.innerHTML = html;
-    return html2canvas(container, { scale: 1.5, backgroundColor: '#ffffff' }).then(function (canvas) {
+    container.innerHTML = buildBranchPrintHtml(branch, data);
+    return html2canvas(container, { scale: PDF_CAPTURE_SCALE, backgroundColor: '#ffffff', logging: false }).then(function (fullCanvas) {
       document.body.removeChild(container);
-      return canvas;
+      function toPx(cssPx) { return Math.round(cssPx * PDF_CAPTURE_SCALE); }
+      var headerCanvas = null;
+      return layout.chunks.map(function (chunk, idx) {
+        if (idx === 0) {
+          var endY = chunk.end > 0 ? layout.rowSpans[chunk.end - 1].bottom : (layout.headerTop + layout.headerHeight);
+          return cropCanvasVertical(fullCanvas, 0, toPx(endY));
+        }
+        if (!headerCanvas) headerCanvas = cropCanvasVertical(fullCanvas, toPx(layout.headerTop), toPx(layout.headerTop + layout.headerHeight));
+        var bodySlice = cropCanvasVertical(fullCanvas, toPx(layout.rowSpans[chunk.start].top), toPx(layout.rowSpans[chunk.end - 1].bottom));
+        return stackCanvasesVertical([headerCanvas, bodySlice]);
+      });
     }, function (err) {
       document.body.removeChild(container);
       throw err;
     });
   }
 
-  // Adds one branch's pages to an in-progress jsPDF document.
-  function addBranchToPdf(pdf, branch, data, isVeryFirstPage) {
-    var chunks = measureBranchPageChunks(branch, data);
+  // Captures every branch (one html2canvas call each) and assembles all
+  // their pages, in order, into one A4 jsPDF document.
+  function buildPdfFromEntries(entries) {
+    var pdf = new jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+    var contentWidthMm = PDF_PAGE_WIDTH_MM - 2 * PDF_MARGIN_MM;
     var chain = Promise.resolve();
-    chunks.forEach(function (chunk, idx) {
+    var pageCount = 0;
+    entries.forEach(function (entry) {
       chain = chain.then(function () {
-        var isFirstChunk = idx === 0;
-        return captureChunkCanvas(buildPageChunkHtml(branch, data, chunk, isFirstChunk)).then(function (canvas) {
-          if (!(isVeryFirstPage && idx === 0)) pdf.addPage();
-          var contentWidthMm = PDF_PAGE_WIDTH_MM - 2 * PDF_MARGIN_MM;
+        return captureBranchPages(entry.branch, entry.data);
+      }).then(function (canvases) {
+        canvases.forEach(function (canvas) {
+          if (pageCount > 0) pdf.addPage();
+          pageCount++;
           var contentHeightMm = canvas.height / canvas.width * contentWidthMm;
           pdf.addImage(canvas.toDataURL('image/png'), 'PNG', PDF_MARGIN_MM, PDF_MARGIN_MM, contentWidthMm, contentHeightMm, undefined, 'MEDIUM');
         });
       });
     });
-    return chain;
+    return chain.then(function () { return pdf; });
   }
 
   function withPdfExportStatus(btn, fn) {
@@ -1763,8 +1792,7 @@
     var entry = lastGeneratedReports && lastGeneratedReports[branchCode];
     if (!entry) return Promise.resolve();
     return withPdfExportStatus(btn, function () {
-      var pdf = new jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
-      return addBranchToPdf(pdf, entry.branch, entry.data, true).then(function () {
+      return buildPdfFromEntries([entry]).then(function (pdf) {
         pdf.save('تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '') + '.pdf');
       });
     });
@@ -1774,19 +1802,8 @@
   function exportAllBranchesToPdf(btn) {
     if (!lastGeneratedReports) return Promise.resolve();
     return withPdfExportStatus(btn, function () {
-      var pdf = new jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
-      var chain = Promise.resolve();
-      var isVeryFirstPage = true;
-      BRANCHES.forEach(function (b) {
-        var entry = lastGeneratedReports[b.code];
-        if (!entry) return;
-        chain = chain.then(function () {
-          var wasFirst = isVeryFirstPage;
-          isVeryFirstPage = false;
-          return addBranchToPdf(pdf, entry.branch, entry.data, wasFirst);
-        });
-      });
-      return chain.then(function () {
+      var entries = BRANCHES.map(function (b) { return lastGeneratedReports[b.code]; }).filter(Boolean);
+      return buildPdfFromEntries(entries).then(function (pdf) {
         pdf.save('تقارير كل الفروع ' + (state.dateFrom || '') + '-' + (state.dateTo || '') + '.pdf');
       });
     });
