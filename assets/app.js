@@ -1369,38 +1369,37 @@
   // Merges several days' parsed rows into one dataset. Products are matched
   // across days by StockCode (falls back to ModelCode if a row has no
   // StockCode) since it's the most stable per-product identifier. Sold
-  // quantities accumulate across every day the product appears in; balances
-  // are overwritten only while processing the most recent day's file, so a
-  // product absent from that last file simply keeps balance 0 (no current
-  // stock data for it) rather than an average or a stale earlier figure.
+  // quantities accumulate across every day the product appears in. Balance
+  // (and the identity fields/price) take whichever occurrence of that exact
+  // StockCode is chronologically most recent — NOT necessarily the batch's
+  // literal last file, since a specific row (commonly a Tahlia-only supplier
+  // code) can be missing from the latest day's export while still being
+  // current as of an earlier day. Files are processed in date order, so the
+  // last write for a given key is always its most recent known snapshot;
+  // a key that simply never recurs after an earlier day keeps that day's
+  // balance instead of silently resetting to 0.
   function mergeMultiDayRows(files) {
     var ordered = files.slice();
     if (ordered.every(function (f) { return f.dateKey != null; })) {
       ordered.sort(function (a, b) { return a.dateKey - b.dateKey; });
     }
-    var latest = ordered[ordered.length - 1];
 
     var byKey = {};
     var order = [];
     ordered.forEach(function (file) {
-      var isLatest = file === latest;
       file.rows.forEach(function (r) {
         var key = r.StockCode || r.ModelCode;
         if (!key) return;
         if (!byKey[key]) {
           byKey[key] = blankRow();
-          TEXT_FIELDS.forEach(function (f) { byKey[key][f.key] = r[f.key]; });
-          byKey[key].UnitPrice = r.UnitPrice;
           order.push(key);
         }
         var merged = byKey[key];
-        if (isLatest) {
-          TEXT_FIELDS.forEach(function (f) { if (r[f.key]) merged[f.key] = r[f.key]; });
-          if (r.UnitPrice) merged.UnitPrice = r.UnitPrice;
-        }
+        TEXT_FIELDS.forEach(function (f) { if (r[f.key]) merged[f.key] = r[f.key]; });
+        if (r.UnitPrice) merged.UnitPrice = r.UnitPrice;
         BRANCHES.forEach(function (b) {
           merged[branchField(b.code, 'SoldQty')] += r[branchField(b.code, 'SoldQty')];
-          if (isLatest) merged[branchField(b.code, 'Balance')] = r[branchField(b.code, 'Balance')];
+          merged[branchField(b.code, 'Balance')] = r[branchField(b.code, 'Balance')];
         });
       });
     });
@@ -1616,7 +1615,7 @@
     if (!entry) return;
     var printArea = document.getElementById('printArea');
     printArea.innerHTML = buildBranchPrintHtml(entry.branch, entry.data);
-    dynamicPrintStyle.textContent = '@media print { @page { size: A4 portrait; margin: 12mm; } }';
+    dynamicPrintStyle.textContent = '@media print { @page { size: A4 portrait; margin: 10mm; } }';
 
     var previousTitle = document.title;
     document.title = 'تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '');
