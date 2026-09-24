@@ -823,38 +823,20 @@
       var daysOfStockLeft = avgDailySoldHere > 0 ? balanceHere / avgDailySoldHere : Infinity;
       var runningLow = daysOfStockLeft <= settings.lowStockDaysThreshold;
 
-      // Negative balance handling — differs by branch:
-      //  - فرع التحلية (803): the OTHER code in this supplier's group is
-      //    the one that actually carries Tahlia's real numbers. If that
-      //    sibling row exists, this row defers to it entirely (excluded
-      //    below) rather than showing its own wrong number. If no sibling
-      //    is found at all, this row stays — with a note — since it's all
-      //    the data there is.
-      //  - Riyadh branches (701/706/707/711): left exactly as-is, no note;
-      //    a negative number there isn't a code-attribution problem.
-      var negativeBalanceNote = null;
-      var deferToSiblingCode = false;
-      if (balanceHere < 0 && branchCode === TAHLIA_BRANCH_CODE) {
-        if (findSiblingCodeRow(r, modelGroupIndex)) {
-          deferToSiblingCode = true;
-        } else {
-          negativeBalanceNote = 'لم يُعثر على هذا الموديل بكود مورد آخر لنفس المورد ضمن الملفات المستوردة';
-        }
-      }
-
+      // Provisional status, using this row's own raw balance/sales exactly
+      // like any other branch — the فرع التحلية (803) code-attribution
+      // check below only ever touches a row that this step already put in
+      // the "needs attention" bucket. Rows that come out "ok"/"surplus"
+      // are never second-guessed, otherwise nearly every model from a
+      // multi-code supplier that simply isn't sold under BOTH codes (the
+      // overwhelming majority) would get flagged for no reason.
       var status, statusLabel;
       if (r.excludedFromReport) {
         status = 'excluded';
         statusLabel = 'مستبعد من التقرير';
-      } else if (deferToSiblingCode) {
-        // Not shown here at all — the sibling row (same model, other code)
-        // already reports Tahlia's real numbers on its own.
-        status = 'deferredToSibling';
-        statusLabel = 'الرصيد الحقيقي مسجل بكود المورد الآخر لهذا الموديل';
       } else if (balanceHere < 0) {
-        // Any negative balance we're NOT deferring on is untrustworthy —
-        // don't pretend to classify it as critical/warning, ask for a
-        // manual count instead.
+        // Untrustworthy on its own — don't pretend to classify it, ask for
+        // a manual count instead.
         status = 'checkStock';
         statusLabel = 'لازم تشييك المخزون';
       } else if (soldElsewhere >= settings.opportunityMinTotalSold && soldHere === 0 && balanceHere === 0) {
@@ -878,6 +860,35 @@
       } else {
         status = 'ok';
         statusLabel = 'المخزون مناسب';
+      }
+
+      // فرع التحلية (803): for a supplier with more than one reference
+      // code, the OTHER (non-root) code is ALWAYS the one that carries
+      // Tahlia's real sales/stock — never the group's first/root code, no
+      // matter what that code's own Tahlia numbers say. So once a root-code
+      // row has been provisionally flagged above (critical/warning/
+      // opportunity/checkStock), it must defer to its sibling's own numbers
+      // instead of showing here with data that isn't really Tahlia's. If no
+      // sibling row exists at all, it stays — flagged for a manual check —
+      // since that's all the data there is.
+      var negativeBalanceNote = null;
+      var needsAttention = status === 'critical' || status === 'warning' || status === 'opportunity' || status === 'checkStock';
+      if (branchCode === TAHLIA_BRANCH_CODE && needsAttention) {
+        var ownNormCode = normalizeSupplierCode(r.SupplierCode);
+        var ownRoot = supplierGroupRootOf[ownNormCode] || ownNormCode;
+        var ownKnownCodes = supplierGroupKnownCodes[ownRoot] || [ownNormCode];
+        if (ownKnownCodes.length > 1 && ownNormCode === ownRoot) {
+          if (findSiblingCodeRow(r, modelGroupIndex)) {
+            // Not shown here at all — the sibling row (same model, other
+            // code) already reports Tahlia's real numbers on its own.
+            status = 'deferredToSibling';
+            statusLabel = 'الرصيد الحقيقي مسجل بكود المورد الآخر لهذا الموديل';
+          } else {
+            status = 'checkStock';
+            statusLabel = 'لازم تشييك المخزون';
+            negativeBalanceNote = 'لم يُعثر على هذا الموديل بكود المورد الآخر (الخاص بالتحلية) ضمن الملفات المستوردة — يجب التأكد يدويًا من المبيعات والمخزون';
+          }
+        }
       }
 
       return {
@@ -1128,16 +1139,17 @@
 
     var rowsHtml;
     if (!data.length) {
-      rowsHtml = '<tr><td colspan="9" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+      rowsHtml = '<tr><td colspan="10" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     } else {
       rowsHtml = data.map(function (d, i) {
         var r = d.row;
-        var desc = escapeAttr(r.StockGroupName || '') + '<br>' + escapeAttr(r.ModelCode || '');
+        var desc = escapeAttr(r.StockGroupName || '');
         if (d.negativeBalanceNote) desc += '<br><span class="report-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
         var price = (Number(r.UnitPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         return '<tr>' +
           '<td class="num">' + (i + 1) + '</td>' +
-          '<td>' + desc + '</td>' +
+          '<td class="desc-cell">' + desc + '</td>' +
+          '<td>' + escapeAttr(r.ModelCode || '') + '</td>' +
           '<td>' + escapeAttr(supplierDisplayText(r)) + '</td>' +
           '<td class="num">' + price + '</td>' +
           '<td class="num">' + d.soldHere + '</td>' +
@@ -1157,7 +1169,7 @@
       '<p class="report-summary">' + summary + '</p>' +
       '<div class="report-preview-wrap">' +
         '<table class="report-preview-table">' +
-          '<thead><tr><th class="num">#</th><th>الصنف / الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th><th class="num">الرصيد</th>' +
+          '<thead><tr><th class="num">#</th><th>البيان</th><th>الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th><th class="num">الرصيد</th>' +
           '<th class="num">إجمالي باقي الفروع</th><th>الأكثر مبيعًا بفرع آخر</th><th>الحالة</th></tr></thead>' +
           '<tbody>' + rowsHtml + '</tbody>' +
         '</table>' +
@@ -1574,12 +1586,13 @@
   function buildPrintRowsHtml(data) {
     return data.map(function (d, i) {
       var r = d.row;
-      var desc = escapeAttr(r.StockGroupName || '') + '<br>' + escapeAttr(r.ModelCode || '');
+      var desc = escapeAttr(r.StockGroupName || '');
       if (d.negativeBalanceNote) desc += '<br><span class="p-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
       var topOtherText = d.topOtherBranchName ? (d.topOtherBranchName + ' (' + d.topOtherBranchQty + ' حبة)') : '—';
       return '<tr>' +
         '<td class="p-td-num">' + (i + 1) + '</td>' +
         '<td class="p-desc-cell">' + desc + '</td>' +
+        '<td>' + escapeAttr(r.ModelCode || '') + '</td>' +
         '<td>' + pdfSupplierCellHtml(r) + '</td>' +
         '<td class="p-td-num">' + fmtPrice(r.UnitPrice) + '</td>' +
         '<td class="p-td-num">' + d.soldHere + '</td>' +
@@ -1594,14 +1607,14 @@
   function buildBranchPrintHtml(branch, data) {
     var rowsHtml = data.length
       ? buildPrintRowsHtml(data)
-      : '<tr><td colspan="9" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+      : '<tr><td colspan="10" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     return '<div class="p-page">' +
       '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
         ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
       '<table class="p-table">' +
-        '<colgroup><col style="width:4%"><col style="width:15%"><col style="width:19%"><col style="width:6%"><col style="width:8%"><col style="width:6%"><col style="width:9%"><col style="width:15%"><col style="width:18%"></colgroup>' +
-        '<thead><tr><th>#</th><th>الصنف / الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
+        '<colgroup><col style="width:5%"><col style="width:11%"><col style="width:12%"><col style="width:15%"><col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:15%"><col style="width:18%"></colgroup>' +
+        '<thead><tr><th>#</th><th>البيان</th><th>الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
         '<th class="p-td-num">إجمالي باقي الفروع</th><th>أقوى فرع من الفروع الثانية</th><th>الحالة</th></tr></thead>' +
         '<tbody>' + rowsHtml + '</tbody>' +
       '</table>' +
