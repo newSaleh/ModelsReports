@@ -28,7 +28,7 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v39 / style v23 — 24/09/2026';
+  var APP_VERSION = 'app v40 / style v23 — 25/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
@@ -1657,13 +1657,18 @@
   var CSS_PX_PER_MM = 96 / 25.4;
   function mmToPx(mm) { return mm * CSS_PX_PER_MM; }
 
-  // 1.25 keeps text clearly sharp (verified visually against 1.5/2) while
-  // producing meaningfully smaller files; 'SLOW' PNG compression below
-  // trims further at capture time, not export time, so it doesn't add to
-  // the wait. PNG beats JPEG here even at low JPEG quality — this is flat,
-  // sharp-edged text/lines, exactly what PNG's lossless compression suits
-  // and JPEG's block compression doesn't.
-  var PDF_CAPTURE_SCALE = 1.25;
+  // 1.25 was tried first for smaller files, but real printed/viewed pages
+  // showed visibly jagged small text (supplier-code sub-text especially)
+  // once every pixel is snapped to pure black/white (see thresholdCanvasBW
+  // below) — that quantization removes the anti-aliasing a lower-resolution
+  // capture relies on for smooth-looking edges. 2 fixes that; the B/W
+  // thresholding still keeps file size far below a non-thresholded capture
+  // at the same scale. 'SLOW' PNG compression below trims further at
+  // capture time, not export time, so it doesn't add to the wait. PNG beats
+  // JPEG here even at low JPEG quality — this is flat, sharp-edged
+  // text/lines, exactly what PNG's lossless compression suits and JPEG's
+  // block compression doesn't.
+  var PDF_CAPTURE_SCALE = 2;
 
   // An off-screen (not display:none, so it still lays out/renders — just
   // positioned off the visible page) container at the page's content width.
@@ -1788,14 +1793,22 @@
   // fit in a single batch (and therefore a single call, same as before);
   // only unusually long ones split, and only the first batch shows the
   // title block, so the merged page sequence reads as one continuous report.
-  var CAPTURE_BATCH_MAX_CHUNKS = 40;
+  // Computed from PDF_CAPTURE_SCALE (not a fixed page count) so raising the
+  // capture scale for sharper text automatically shrinks the safe batch
+  // size instead of silently exceeding the canvas limit again.
+  var SAFE_CANVAS_PX_HEIGHT = 60000; // margin below the ~65535px browser cap
+  function captureBatchMaxChunks() {
+    var pageContentHeightPx = mmToPx(PDF_PAGE_HEIGHT_MM - 2 * PDF_MARGIN_MM);
+    return Math.max(1, Math.floor(SAFE_CANVAS_PX_HEIGHT / (pageContentHeightPx * PDF_CAPTURE_SCALE)));
+  }
   function captureAllBranchPages(branch, data) {
     if (!data.length) return captureBranchPages(branch, data, true, 0);
     var fullLayout = measureBranchLayout(branch, data, true);
     var chunks = fullLayout.chunks;
+    var batchMaxChunks = captureBatchMaxChunks();
     var chain = Promise.resolve();
     var allCanvases = [];
-    for (var bi = 0; bi < chunks.length; bi += CAPTURE_BATCH_MAX_CHUNKS) {
+    for (var bi = 0; bi < chunks.length; bi += batchMaxChunks) {
       (function (batchChunks, isFirstBatch) {
         var rowStart = batchChunks[0].start;
         var rowEnd = batchChunks[batchChunks.length - 1].end;
@@ -1805,7 +1818,7 @@
         }).then(function (canvases) {
           allCanvases = allCanvases.concat(canvases);
         });
-      })(chunks.slice(bi, bi + CAPTURE_BATCH_MAX_CHUNKS), bi === 0);
+      })(chunks.slice(bi, bi + batchMaxChunks), bi === 0);
     }
     return chain.then(function () { return allCanvases; });
   }
