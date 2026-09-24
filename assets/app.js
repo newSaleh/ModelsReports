@@ -28,8 +28,7 @@
   var DEFAULT_SETTINGS = {
     hotSoldMin: 5,               // minimum sales in a branch to call it "selling well"
     opportunityMinTotalSold: 20, // sold this well elsewhere to justify stocking a new branch
-    adequateMinBalance: 8,       // balance at/above this, with low sell-through (see below), needs no reorder
-    adequateSellThroughRatio: 0.5, // sold less than this fraction of current balance -> stock is holding, not depleting
+    lowStockDaysThreshold: 3,    // balance will run out within this many days -> "رصيد منخفض"
     maxBalance: 50               // current balance above this -> flagged as overstock/surplus
   };
 
@@ -140,7 +139,8 @@
     supplierAliasText: '',
     excludedSupplierRootsText: '',
     minPriceFilter: null,
-    minSoldPerBranchFilter: 0
+    minSoldPerBranchFilter: 0,
+    importedDayCount: 1
   };
 
   var STATUS_META = {
@@ -402,6 +402,7 @@
     if (state.excludedSupplierRootsText == null) { state.excludedSupplierRootsText = DEFAULT_EXCLUDED_SUPPLIER_TEXT; seededAlias = true; }
     if (state.minPriceFilter === undefined) state.minPriceFilter = null;
     if (state.minSoldPerBranchFilter == null) state.minSoldPerBranchFilter = 0;
+    if (!state.importedDayCount) state.importedDayCount = 1;
     state.rows.forEach(function (r) { if (r.excludedFromReport == null) r.excludedFromReport = false; });
     rebuildSupplierAliasMap();
     if (seededAlias) save();
@@ -418,6 +419,7 @@
     state.excludedSupplierRootsText = DEFAULT_EXCLUDED_SUPPLIER_TEXT;
     state.minPriceFilter = null;
     state.minSoldPerBranchFilter = 0;
+    state.importedDayCount = 1;
     rebuildSupplierAliasMap();
   }
 
@@ -493,8 +495,8 @@
 
   // ---------------------------------------------------------------------
   // Settings panel removed — the stock-adequacy rule now uses the fixed
-  // (documented) thresholds in DEFAULT_SETTINGS: adequateMinBalance (8) and
-  // adequateSellThroughRatio (50%). No dedicated UI for tuning them yet.
+  // (documented) thresholds in DEFAULT_SETTINGS: lowStockDaysThreshold (3
+  // days of stock left or fewer). No dedicated UI for tuning them yet.
 
   // ---------------------------------------------------------------------
   // Supplier code merge panel
@@ -764,6 +766,7 @@
   function computeBranchReportRows(branchCode, includeExcluded) {
     var rows = includeExcluded ? state.rows : reportableRows();
     var settings = state.settings;
+    var numDays = state.importedDayCount || 1;
     return rows.map(function (r) {
       var soldHere = Number(r[branchField(branchCode, 'SoldQty')]) || 0;
       var balanceHere = Number(r[branchField(branchCode, 'Balance')]) || 0;
@@ -774,12 +777,29 @@
       // steadily split across branches still counts — e.g. 4 here + 14
       // elsewhere clears a threshold of 15 even though neither half alone does.
       var sellingWell = soldHere >= settings.hotSoldMin || (r.TotalQtySold || 0) >= settings.opportunityMinTotalSold;
-      // A branch holding enough units (adequateMinBalance+) that it hasn't
-      // sold through a large share of (adequateSellThroughRatio) doesn't
-      // need reordering yet, even if it otherwise "sells well" — the stock
-      // on hand is keeping up with demand.
-      var stockHolding = balanceHere >= settings.adequateMinBalance &&
-        soldHere < settings.adequateSellThroughRatio * balanceHere;
+      // Days of stock left = balance ÷ average daily sales in this branch,
+      // where average daily sales = this branch's sold quantity ÷ the
+      // number of days imported (each imported file/day counts as one day).
+      // E.g. 15 sold over 3 imported days = 5/day; a balance of 15 lasts
+      // 15 ÷ 5 = 3 days. lowStockDaysThreshold (3) days left or fewer -> low.
+      var avgDailySoldHere = soldHere / numDays;
+      var daysOfStockLeft = avgDailySoldHere > 0 ? balanceHere / avgDailySoldHere : Infinity;
+      var runningLow = daysOfStockLeft <= settings.lowStockDaysThreshold;
+
+      // A negative balance sometimes means this model's sales/stock actually
+      // landed under the supplier's OTHER reference code instead of this one
+      // (seen especially at فرع التحلية) — flag it for manual verification
+      // rather than silently guessing which code holds the real numbers.
+      var negativeBalanceNote = null;
+      if (balanceHere < 0) {
+        var normCode = normalizeSupplierCode(r.SupplierCode);
+        var root = supplierGroupRootOf[normCode] || normCode;
+        var known = supplierGroupKnownCodes[root] || [normCode];
+        if (known.length > 1) {
+          var otherCodes = known.filter(function (c) { return c !== normCode; }).map(formatCodeForDisplay);
+          negativeBalanceNote = 'الرصيد سالب — تحقق من كود المورد الآخر (' + otherCodes.join('/') + ')';
+        }
+      }
 
       var status, statusLabel;
       if (r.excludedFromReport) {
@@ -792,8 +812,8 @@
         // "restock what you already sell here".
         status = 'opportunity';
         statusLabel = 'موديل ناجح — غير متوفر لديك';
-      } else if (sellingWell && !stockHolding) {
-        if (balanceHere === 0) {
+      } else if (sellingWell && runningLow) {
+        if (balanceHere <= 0) {
           status = 'critical';
           statusLabel = 'لا يوجد رصيد — اطلب الآن';
         } else {
@@ -810,7 +830,8 @@
 
       return {
         row: r, soldHere: soldHere, soldElsewhere: soldElsewhere, balanceHere: balanceHere,
-        status: status, statusLabel: statusLabel,
+        status: status, statusLabel: statusLabel, daysOfStockLeft: daysOfStockLeft,
+        negativeBalanceNote: negativeBalanceNote,
         topOtherBranchName: topOther.qty > 0 ? topOther.name : null, topOtherBranchQty: topOther.qty
       };
     }).sort(function (a, b) {
@@ -1055,13 +1076,15 @@
 
     var rowsHtml;
     if (!data.length) {
-      rowsHtml = '<tr><td colspan="8" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+      rowsHtml = '<tr><td colspan="9" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     } else {
-      rowsHtml = data.map(function (d) {
+      rowsHtml = data.map(function (d, i) {
         var r = d.row;
         var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
+        if (d.negativeBalanceNote) desc += '<br><span class="report-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
         var price = (Number(r.UnitPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         return '<tr>' +
+          '<td class="num">' + (i + 1) + '</td>' +
           '<td>' + desc + '</td>' +
           '<td>' + escapeAttr(supplierDisplayText(r)) + '</td>' +
           '<td class="num">' + price + '</td>' +
@@ -1082,7 +1105,7 @@
       '<p class="report-summary">' + summary + '</p>' +
       '<div class="report-preview-wrap">' +
         '<table class="report-preview-table">' +
-          '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th><th class="num">الرصيد</th>' +
+          '<thead><tr><th class="num">#</th><th>الصنف / الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th><th class="num">الرصيد</th>' +
           '<th class="num">إجمالي باقي الفروع</th><th>الأكثر مبيعًا بفرع آخر</th><th>الحالة</th></tr></thead>' +
           '<tbody>' + rowsHtml + '</tbody>' +
         '</table>' +
@@ -1208,7 +1231,7 @@
       state = {
         rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS),
         supplierAliasText: DEFAULT_SUPPLIER_ALIAS_TEXT, excludedSupplierRootsText: DEFAULT_EXCLUDED_SUPPLIER_TEXT,
-        minPriceFilter: null, minSoldPerBranchFilter: 0
+        minPriceFilter: null, minSoldPerBranchFilter: 0, importedDayCount: 1
       };
       rebuildSupplierAliasMap();
       document.getElementById('supplierAliasInput').value = state.supplierAliasText;
@@ -1360,6 +1383,9 @@
   function finishImport(validFiles, importStatusEl) {
     var missingDates = validFiles.filter(function (f) { return f.dateKey == null; }).length;
     state.rows = mergeMultiDayRows(validFiles);
+    // Each file/paste represents one day — this count drives the average
+    // daily-sales estimate used to flag low stock (see computeBranchReportRows).
+    state.importedDayCount = validFiles.length;
 
     // Auto-fill the date range from filenames, so the report is labeled
     // correctly without the user typing it in — still freely editable after.
@@ -1374,7 +1400,7 @@
 
     var msg = 'تم استيراد ' + validFiles.length + (validFiles.length > 1 ? ' أيام' : ' ملف') + ' — ' + state.rows.length + ' صنفًا.';
     if (validFiles.length > 1) {
-      msg += ' المبيعات مُجمَّعة عبر كل الأيام، والرصيد الحالي مأخوذ من أحدث يوم فقط.';
+      msg += ' المبيعات مُجمَّعة عبر كل الأيام، والرصيد الحالي مأخوذ من أحدث يوم فقط. معدل المبيعات اليومي (لحساب نفاد المخزون) محسوب على أساس ' + validFiles.length + ' يوم.';
       if (missingDates) {
         msg += ' تنبيه: تعذّر استنتاج التاريخ من اسم ' + missingDates + ' من الملفات، فاعتُمد ترتيب اختيارها كما هو.';
       }
@@ -1494,11 +1520,13 @@
   }
 
   function buildPrintRowsHtml(data) {
-    return data.map(function (d) {
+    return data.map(function (d, i) {
       var r = d.row;
       var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
+      if (d.negativeBalanceNote) desc += '<br><span class="p-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
       var topOtherText = d.topOtherBranchName ? (d.topOtherBranchName + ' (' + d.topOtherBranchQty + ' حبة)') : '—';
       return '<tr>' +
+        '<td class="p-td-num">' + (i + 1) + '</td>' +
         '<td>' + desc + '</td>' +
         '<td>' + pdfSupplierCellHtml(r) + '</td>' +
         '<td class="p-td-num">' + fmtPrice(r.UnitPrice) + '</td>' +
@@ -1514,14 +1542,14 @@
   function buildBranchPrintHtml(branch, data) {
     var rowsHtml = data.length
       ? buildPrintRowsHtml(data)
-      : '<tr><td colspan="8" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+      : '<tr><td colspan="9" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     return '<div class="p-page">' +
       '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
         ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
       '<table class="p-table">' +
-        '<colgroup><col style="width:19%"><col style="width:21%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:10%"><col style="width:12%"><col style="width:13%"></colgroup>' +
-        '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
+        '<colgroup><col style="width:4%"><col style="width:17%"><col style="width:19%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:10%"><col style="width:12%"><col style="width:13%"></colgroup>' +
+        '<thead><tr><th>#</th><th>الصنف / الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
         '<th class="p-td-num">إجمالي باقي الفروع</th><th>أقوى فرع من الفروع الثانية</th><th>الحالة</th></tr></thead>' +
         '<tbody>' + rowsHtml + '</tbody>' +
       '</table>' +
