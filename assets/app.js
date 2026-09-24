@@ -28,7 +28,7 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v33 / style v22 — 24/09/2026';
+  var APP_VERSION = 'app v34 / style v23 — 24/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
@@ -1564,12 +1564,15 @@
   });
 
   // ---------------------------------------------------------------------
-  // PDF export — native browser print (window.print() + @media print),
-  // not html2canvas. The browser renders real, selectable, vector text —
-  // correct Arabic shaping/bidi comes for free, same as any normal page —
-  // and pagination is the browser's own, so this scales to reports with
-  // hundreds of rows without the multi-minute render times/huge files a
-  // screenshot-per-page approach hit at full-catalog scale.
+  // PDF export — built directly as a real PDF file (html2canvas + jsPDF),
+  // not the browser's print dialog. window.print()'s output paper size
+  // depends on the browser/OS's own remembered paper-size preference,
+  // which can silently override the page's declared @page size — verified
+  // broken in practice on iOS Safari (still produced US Letter after the
+  // @page fix). Building the file directly makes the page size (A4) and
+  // layout exactly what's declared, regardless of any browser setting,
+  // and captures the SAME rendering already shown on screen (WYSIWYG),
+  // sidestepping the browser's separate print-rendering pass entirely.
   // ---------------------------------------------------------------------
   function fmtPrice(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -1590,14 +1593,14 @@
     return escapeAttr(m[1]) + '<span class="p-td-suppliercode">' + escapeAttr(m[2]) + '</span>';
   }
 
-  function buildPrintRowsHtml(data) {
+  function buildPrintRowsHtml(data, baseIndex) {
     return data.map(function (d, i) {
       var r = d.row;
       var desc = escapeAttr(r.StockGroupName || '');
       if (d.negativeBalanceNote) desc += '<br><span class="p-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
       return '<tr>' +
-        '<td class="p-td-num">' + (i + 1) + '</td>' +
-        '<td class="p-desc-cell">' + desc + '</td>' +
+        '<td class="p-td-num">' + (baseIndex + i + 1) + '</td>' +
+        '<td>' + desc + '</td>' +
         '<td>' + escapeAttr(r.ModelCode || '') + '</td>' +
         '<td>' + pdfSupplierCellHtml(r) + '</td>' +
         '<td class="p-td-num">' + fmtPrice(r.UnitPrice) + '</td>' +
@@ -1609,77 +1612,191 @@
     }).join('');
   }
 
+  var PDF_COLGROUP_HTML = '<colgroup><col style="width:5%"><col style="width:14%"><col style="width:14%"><col style="width:17%">' +
+    '<col style="width:10%"><col style="width:9%"><col style="width:8%"><col style="width:8%"><col style="width:15%"></colgroup>';
+
+  function buildPrintTheadHtml(branchName) {
+    return '<thead><tr><th>#</th><th>البيان</th><th>الموديل</th><th>المورد</th><th class="p-td-num">السعر</th>' +
+      '<th class="p-td-num">مبيعات ' + branchName + '</th><th class="p-td-num">الرصيد</th>' +
+      '<th class="p-td-num">إجمالي باقي الفروع</th><th>الحالة</th></tr></thead>';
+  }
+
+  // The full branch as ONE block — used only to measure natural row
+  // heights (see measureBranchPageChunks) before slicing into per-page
+  // chunks; never captured as-is.
   function buildBranchPrintHtml(branch, data) {
     var rowsHtml = data.length
-      ? buildPrintRowsHtml(data)
+      ? buildPrintRowsHtml(data, 0)
       : '<tr><td colspan="9" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     return '<div class="p-page">' +
       '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
         ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
-      '<table class="p-table">' +
-        '<colgroup><col style="width:5%"><col style="width:14%"><col style="width:14%"><col style="width:18%"><col style="width:7%"><col style="width:8%"><col style="width:7%"><col style="width:8%"><col style="width:19%"></colgroup>' +
-        '<thead><tr><th>#</th><th>البيان</th><th>الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
-        '<th class="p-td-num">إجمالي باقي الفروع</th><th>الحالة</th></tr></thead>' +
+      '<table class="p-table">' + PDF_COLGROUP_HTML + buildPrintTheadHtml(branch.name) +
         '<tbody>' + rowsHtml + '</tbody>' +
       '</table>' +
     '</div>';
   }
 
-  // Shared by both the single-branch and all-branches export: fills
-  // #printArea, sets a print-friendly document title, triggers the browser
-  // print dialog, and restores everything afterward. The @page size itself
-  // is a static rule in style.css (not injected here) — declaring it from
-  // page load, instead of right before print(), removes any timing risk.
-  function printHtmlAndOpenDialog(html, printTitle) {
-    var printArea = document.getElementById('printArea');
-    printArea.innerHTML = html;
+  // One page's worth of a branch's table: title+meta only on the branch's
+  // first page, the column header always repeated, and just this chunk's
+  // rows (continuously numbered via baseIndex, not restarting per page).
+  function buildPageChunkHtml(branch, data, chunk, isFirstChunk) {
+    var slice = data.slice(chunk.start, chunk.end);
+    var rowsHtml = slice.length
+      ? buildPrintRowsHtml(slice, chunk.start)
+      : '<tr><td colspan="9" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+    var head = isFirstChunk
+      ? '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
+        '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
+          ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>'
+      : '';
+    return '<div class="p-page">' + head +
+      '<table class="p-table">' + PDF_COLGROUP_HTML + buildPrintTheadHtml(branch.name) +
+        '<tbody>' + rowsHtml + '</tbody>' +
+      '</table>' +
+    '</div>';
+  }
 
-    var previousTitle = document.title;
-    document.title = printTitle;
-    document.body.classList.add('printing');
+  var PDF_PAGE_WIDTH_MM = 210, PDF_PAGE_HEIGHT_MM = 297, PDF_MARGIN_MM = 10;
+  var CSS_PX_PER_MM = 96 / 25.4;
+  function mmToPx(mm) { return mm * CSS_PX_PER_MM; }
 
-    function cleanup() {
-      document.body.classList.remove('printing');
-      document.title = previousTitle;
-      printArea.innerHTML = '';
-      window.removeEventListener('afterprint', cleanup);
+  // An off-screen (not display:none, so it still lays out/renders — just
+  // positioned off the visible page) container at the page's content
+  // width, used both to measure row heights and, per chunk, to capture.
+  function createOffscreenPageEl() {
+    var el = document.createElement('div');
+    el.style.position = 'fixed';
+    el.style.top = '0';
+    el.style.left = '-99999px';
+    el.style.width = mmToPx(PDF_PAGE_WIDTH_MM - 2 * PDF_MARGIN_MM) + 'px';
+    el.style.background = '#fff';
+    document.body.appendChild(el);
+    return el;
+  }
+
+  // Decides, for one branch, how its rows split across pages — never
+  // splitting a single row across a page boundary. Renders the branch's
+  // full table once (off-screen) purely to read real row heights, then
+  // walks rows accumulating height against one page's content height.
+  function measureBranchPageChunks(branch, data) {
+    if (!data.length) return [{ start: 0, end: 0 }];
+    var container = createOffscreenPageEl();
+    container.innerHTML = buildBranchPrintHtml(branch, data);
+    var titleEl = container.querySelector('.p-title');
+    var metaEl = container.querySelector('.p-meta');
+    var thead = container.querySelector('thead');
+    var rows = container.querySelectorAll('tbody tr');
+
+    var pageContentHeightPx = mmToPx(PDF_PAGE_HEIGHT_MM - 2 * PDF_MARGIN_MM);
+    var titleBlockHeight = (titleEl ? titleEl.getBoundingClientRect().height : 0) +
+      (metaEl ? metaEl.getBoundingClientRect().height : 0) + 8; // + table margin-top
+    var headerHeight = thead ? thead.getBoundingClientRect().height : 0;
+
+    var chunks = [];
+    var chunkStart = 0;
+    var usedHeight = titleBlockHeight + headerHeight;
+    for (var i = 0; i < rows.length; i++) {
+      var rh = rows[i].getBoundingClientRect().height;
+      if (i > chunkStart && usedHeight + rh > pageContentHeightPx) {
+        chunks.push({ start: chunkStart, end: i });
+        chunkStart = i;
+        usedHeight = headerHeight + rh; // continuation pages repeat only the header, not the title
+      } else {
+        usedHeight += rh;
+      }
     }
-    window.addEventListener('afterprint', cleanup);
+    chunks.push({ start: chunkStart, end: rows.length });
 
-    // Small delay so the layout applies before the print dialog opens.
-    setTimeout(function () {
-      window.print();
-      setTimeout(cleanup, 60000); // safety net if afterprint never fires
-    }, 30);
+    document.body.removeChild(container);
+    return chunks;
   }
 
-  function exportBranchReportToPdf(branchCode) {
+  // Captures one page-chunk's HTML to a canvas via html2canvas (scale 1.5
+  // for good print quality without excessive file size) and cleans up its
+  // off-screen container.
+  function captureChunkCanvas(html) {
+    var container = createOffscreenPageEl();
+    container.innerHTML = html;
+    return html2canvas(container, { scale: 1.5, backgroundColor: '#ffffff' }).then(function (canvas) {
+      document.body.removeChild(container);
+      return canvas;
+    }, function (err) {
+      document.body.removeChild(container);
+      throw err;
+    });
+  }
+
+  // Adds one branch's pages to an in-progress jsPDF document.
+  function addBranchToPdf(pdf, branch, data, isVeryFirstPage) {
+    var chunks = measureBranchPageChunks(branch, data);
+    var chain = Promise.resolve();
+    chunks.forEach(function (chunk, idx) {
+      chain = chain.then(function () {
+        var isFirstChunk = idx === 0;
+        return captureChunkCanvas(buildPageChunkHtml(branch, data, chunk, isFirstChunk)).then(function (canvas) {
+          if (!(isVeryFirstPage && idx === 0)) pdf.addPage();
+          var contentWidthMm = PDF_PAGE_WIDTH_MM - 2 * PDF_MARGIN_MM;
+          var contentHeightMm = canvas.height / canvas.width * contentWidthMm;
+          pdf.addImage(canvas.toDataURL('image/png'), 'PNG', PDF_MARGIN_MM, PDF_MARGIN_MM, contentWidthMm, contentHeightMm, undefined, 'MEDIUM');
+        });
+      });
+    });
+    return chain;
+  }
+
+  function withPdfExportStatus(btn, fn) {
+    var originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ جارٍ تجهيز PDF...';
+    return fn().catch(function (err) {
+      console.error('PDF export failed', err);
+      alert('تعذّر تصدير PDF. حاول مجددًا.');
+    }).finally(function () {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    });
+  }
+
+  function exportBranchReportToPdf(branchCode, btn) {
     var entry = lastGeneratedReports && lastGeneratedReports[branchCode];
-    if (!entry) return;
-    printHtmlAndOpenDialog(
-      buildBranchPrintHtml(entry.branch, entry.data),
-      'تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '')
-    );
+    if (!entry) return Promise.resolve();
+    return withPdfExportStatus(btn, function () {
+      var pdf = new jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+      return addBranchToPdf(pdf, entry.branch, entry.data, true).then(function () {
+        pdf.save('تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '') + '.pdf');
+      });
+    });
   }
 
-  // All 5 branches concatenated into one print job. Each branch's .p-page
-  // forces a page break before it (see style.css) so the next branch always
-  // starts at the top of a fresh page, even if the previous one ran long.
-  function exportAllBranchesToPdf() {
-    if (!lastGeneratedReports) return;
-    var html = BRANCHES.map(function (b) {
-      var entry = lastGeneratedReports[b.code];
-      return entry ? buildBranchPrintHtml(entry.branch, entry.data) : '';
-    }).join('');
-    printHtmlAndOpenDialog(html, 'تقارير كل الفروع ' + (state.dateFrom || '') + '-' + (state.dateTo || ''));
+  // All 5 branches into one PDF file, each starting on its own fresh page.
+  function exportAllBranchesToPdf(btn) {
+    if (!lastGeneratedReports) return Promise.resolve();
+    return withPdfExportStatus(btn, function () {
+      var pdf = new jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+      var chain = Promise.resolve();
+      var isVeryFirstPage = true;
+      BRANCHES.forEach(function (b) {
+        var entry = lastGeneratedReports[b.code];
+        if (!entry) return;
+        chain = chain.then(function () {
+          var wasFirst = isVeryFirstPage;
+          isVeryFirstPage = false;
+          return addBranchToPdf(pdf, entry.branch, entry.data, wasFirst);
+        });
+      });
+      return chain.then(function () {
+        pdf.save('تقارير كل الفروع ' + (state.dateFrom || '') + '-' + (state.dateTo || '') + '.pdf');
+      });
+    });
   }
 
   document.addEventListener('click', function (e) {
     var btn = e.target.closest && e.target.closest('.pdf-btn');
-    if (!btn) return;
-    if (btn.id === 'btnExportAllPdf') exportAllBranchesToPdf();
-    else exportBranchReportToPdf(btn.getAttribute('data-branch'));
+    if (!btn || btn.disabled) return;
+    if (btn.id === 'btnExportAllPdf') exportAllBranchesToPdf(btn);
+    else exportBranchReportToPdf(btn.getAttribute('data-branch'), btn);
   });
 
   // ---------------------------------------------------------------------
