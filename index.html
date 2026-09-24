@@ -146,8 +146,9 @@
         <label for="minSoldPerBranchFilter">الحد الأدنى لعدد القطع المباعة في أي فرع من الفروع</label>
         <input type="number" id="minSoldPerBranchFilter" min="0" step="1" placeholder="0 = بلا حد">
       </div>
-      <p class="hint">إن باع الصنف هذا الحد في أي فرع من الفروع، يظهر في تقرير كل فرع وفق حالته هناك (لا يوجد رصيد /
-        رصيد منخفض / فرصة جديدة).</p>
+      <p class="hint">هذا الرقم هو نفسه معيار "الصنف القوي" في كل التطبيق: إن باع الصنف هذا الحد في أي فرع، يظهر في
+        تقرير كل فرع آخر وفق حالته هناك (لا يوجد رصيد / رصيد منخفض / فرصة جديدة). بلا تحديد، يُستخدم الحد الافتراضي
+        (٥ قطع).</p>
     </div>
 
     <div class="panel flow-card generate-card">
@@ -186,6 +187,6 @@
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/html2canvas.min.js"></script>
 <script src="vendor/jspdf.umd.min.js"></script>
-<script src="assets/app.js?v=38"></script>
+<script src="assets/app.js?v=39"></script>
 </body>
 </html>

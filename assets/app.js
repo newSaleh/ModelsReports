@@ -28,7 +28,7 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v38 / style v23 — 24/09/2026';
+  var APP_VERSION = 'app v39 / style v23 — 24/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
@@ -811,6 +811,15 @@
     var settings = state.settings;
     var numDays = state.importedDayCount || 1;
     var modelGroupIndex = branchCode === TAHLIA_BRANCH_CODE ? buildModelGroupIndex(rows) : null;
+    // "قوي/selling well" is judged by the same number the user already
+    // controls in "٥. فلاتر إضافية" → "الحد الأدنى لعدد القطع المباعة في أي
+    // فرع من الفروع" — so raising or lowering that one filter also raises
+    // or lowers what counts as hot enough to trigger رصيد منخفض/لا يوجد
+    // رصيد/فرصة جديدة, instead of a separate number hidden in the code.
+    // Falls back to the built-in default (hotSoldMin) only while that
+    // filter is left empty/0.
+    var userMinSold = Number(state.minSoldPerBranchFilter) || 0;
+    var hotSoldMin = userMinSold > 0 ? userMinSold : settings.hotSoldMin;
     return rows.map(function (r) {
       var soldHere = Number(r[branchField(branchCode, 'SoldQty')]) || 0;
       var balanceHere = Number(r[branchField(branchCode, 'Balance')]) || 0;
@@ -820,7 +829,7 @@
       // this branch or just the others in isolation) so a model that sells
       // steadily split across branches still counts — e.g. 4 here + 14
       // elsewhere clears a threshold of 15 even though neither half alone does.
-      var sellingWell = soldHere >= settings.hotSoldMin || (r.TotalQtySold || 0) >= settings.combinedSellingWellMin;
+      var sellingWell = soldHere >= hotSoldMin || (r.TotalQtySold || 0) >= settings.combinedSellingWellMin;
       // Days of stock left = balance ÷ average daily sales in this branch,
       // where average daily sales = this branch's sold quantity ÷ the
       // number of days imported (each imported file/day counts as one day).
@@ -846,7 +855,7 @@
         // a manual count instead.
         status = 'checkStock';
         statusLabel = 'لازم تشييك المخزون';
-      } else if (topOther.qty >= settings.hotSoldMin && soldHere === 0 && balanceHere === 0) {
+      } else if (topOther.qty >= hotSoldMin && soldHere === 0 && balanceHere === 0) {
         // Checked before the generic reorder case below: a model that has
         // never been carried in this branch at all is a "new opportunity"
         // (consider introducing it), which is a different action from
