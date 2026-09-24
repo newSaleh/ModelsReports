@@ -29,6 +29,7 @@
     <button id="btnTemplate" class="btn btn-ghost" title="تنزيل نموذج فارغ بنفس الأعمدة">نموذج فارغ</button>
     <button id="btnAddRow" class="btn btn-ghost">+ إضافة صنف</button>
     <button id="btnSupplierMergeToggle" class="btn btn-ghost">🔗 دمج أكواد الموردين</button>
+    <button id="btnSupplierExcludeToggle" class="btn btn-ghost">🚫 استبعاد موردين دائم</button>
   </div>
   <div class="toolbar-group toolbar-search">
     <input type="search" id="searchBox" placeholder="بحث في جدول البيانات...">
@@ -50,6 +51,16 @@
   <div class="supplier-merge-actions">
     <button id="btnSupplierMergeSave" class="btn btn-primary">حفظ الدمج</button>
     <span id="supplierMergeStatus" class="supplier-merge-status"></span>
+  </div>
+</div>
+
+<div class="settings-panel" id="supplierExcludePanel" hidden>
+  <p class="settings-intro">أكواد الموردين هنا تُستبعد نهائيًا من كل التقارير الخمسة (ولا تظهر حتى في قائمة
+    اختيار الموردين)، بغض النظر عن أي فلتر آخر. كود واحد في كل سطر أو مفصولة بفاصلة. يُحفظ هذا في متصفحك فقط.</p>
+  <textarea id="supplierExcludeInput" dir="ltr" rows="3" placeholder="319"></textarea>
+  <div class="supplier-merge-actions">
+    <button id="btnSupplierExcludeSave" class="btn btn-primary">حفظ الاستبعاد</button>
+    <span id="supplierExcludeStatus" class="supplier-merge-status"></span>
   </div>
 </div>
 
@@ -126,6 +137,19 @@
       <p class="hint">افتراضيًا كل الأصناف مُضمَّنة؛ ألغِ تحديد ما لا تريد تضمينه.</p>
     </div>
 
+    <div class="panel flow-card">
+      <h2>٥. فلاتر إضافية</h2>
+      <div class="field">
+        <label for="minPriceFilter">الحد الأدنى لسعر الصنف</label>
+        <input type="number" id="minPriceFilter" min="0" step="0.01" placeholder="بلا حد أدنى (كل الأسعار)">
+      </div>
+      <div class="field">
+        <label for="minSoldPerBranchFilter">الحد الأدنى لعدد القطع المباعة في نفس الفرع ليظهر الصنف في تقريره</label>
+        <input type="number" id="minSoldPerBranchFilter" min="0" step="1" placeholder="0 = بلا حد">
+      </div>
+      <p class="hint">لا ينطبق حد المبيعات في نفس الفرع على أصناف "فرصة جديدة" لأنها أصلًا غير مباعة في ذلك الفرع.</p>
+    </div>
+
     <div class="panel flow-card generate-card">
       <button id="btnGenerateReports" class="btn btn-primary btn-large">توليد التقارير الخمسة</button>
       <p class="status" id="generateStatusMsg"></p>
@@ -157,6 +181,6 @@
 <div id="printArea" aria-hidden="true"></div>
 
 <script src="vendor/xlsx.full.min.js"></script>
-<script src="assets/app.js?v=20"></script>
+<script src="assets/app.js?v=21"></script>
 </body>
 </html>

@@ -39,6 +39,12 @@
   // merging below.
   var DEFAULT_SUPPLIER_ALIAS_TEXT = '';
 
+  // Suppliers permanently excluded from all 5 reports, seeded once into a
+  // new browser's saved state (same pattern as DEFAULT_SUPPLIER_ALIAS_TEXT)
+  // but editable/removable anytime from the "🚫 استبعاد موردين دائم" panel.
+  // 319 is the merged-group root of 319/447 (العيسائي أواني).
+  var DEFAULT_EXCLUDED_SUPPLIER_TEXT = '319';
+
   // ---------------------------------------------------------------------
   // Built-in supplier merging (Riyadh/Jeddah branches of the same company,
   // etc.). Two codes merge when either (a) they share the same short name
@@ -131,7 +137,10 @@
     dateFrom: '',
     dateTo: '',
     settings: Object.assign({}, DEFAULT_SETTINGS),
-    supplierAliasText: ''
+    supplierAliasText: '',
+    excludedSupplierRootsText: '',
+    minPriceFilter: null,
+    minSoldPerBranchFilter: 0
   };
 
   var STATUS_META = {
@@ -390,6 +399,9 @@
     // saved before — an explicitly-cleared empty string is left alone.
     var seededAlias = false;
     if (state.supplierAliasText == null) { state.supplierAliasText = DEFAULT_SUPPLIER_ALIAS_TEXT; seededAlias = true; }
+    if (state.excludedSupplierRootsText == null) { state.excludedSupplierRootsText = DEFAULT_EXCLUDED_SUPPLIER_TEXT; seededAlias = true; }
+    if (state.minPriceFilter === undefined) state.minPriceFilter = null;
+    if (state.minSoldPerBranchFilter == null) state.minSoldPerBranchFilter = 0;
     state.rows.forEach(function (r) { if (r.excludedFromReport == null) r.excludedFromReport = false; });
     rebuildSupplierAliasMap();
     if (seededAlias) save();
@@ -403,6 +415,9 @@
     state.dateTo = '';
     state.settings = Object.assign({}, DEFAULT_SETTINGS);
     state.supplierAliasText = DEFAULT_SUPPLIER_ALIAS_TEXT;
+    state.excludedSupplierRootsText = DEFAULT_EXCLUDED_SUPPLIER_TEXT;
+    state.minPriceFilter = null;
+    state.minSoldPerBranchFilter = 0;
     rebuildSupplierAliasMap();
   }
 
@@ -520,6 +535,48 @@
       updateSupplierMergeStatus();
       refreshAfterDataChange();
       renderTableIfActive();
+      scheduleSave();
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Permanent supplier exclusion — codes here never appear in any of the 5
+  // reports (nor in the supplier picker), no matter what's selected there.
+  // General mechanism, not specific to any one supplier; see
+  // DEFAULT_EXCLUDED_SUPPLIER_TEXT for the one default entry.
+  // ---------------------------------------------------------------------
+  function permanentlyExcludedSupplierRoots() {
+    var set = {};
+    (state.excludedSupplierRootsText || '').split(/[\n,]/).map(function (s) { return s.trim(); })
+      .filter(Boolean).forEach(function (code) { set[resolveSupplierCode(code)] = true; });
+    return set;
+  }
+
+  function updateSupplierExcludeStatus() {
+    var statusEl = document.getElementById('supplierExcludeStatus');
+    if (!statusEl) return;
+    var roots = Object.keys(permanentlyExcludedSupplierRoots());
+    if (!roots.length) { statusEl.textContent = 'لا يوجد مورد مستبعد نهائيًا حاليًا.'; return; }
+    var names = roots.map(function (root) { return supplierGroupDisplayName[root] || root; });
+    statusEl.textContent = 'مستبعد نهائيًا: ' + names.join('، ') + '.';
+  }
+
+  function initSupplierExcludePanel() {
+    var panel = document.getElementById('supplierExcludePanel');
+    var toggleBtn = document.getElementById('btnSupplierExcludeToggle');
+    var textarea = document.getElementById('supplierExcludeInput');
+
+    textarea.value = state.excludedSupplierRootsText || '';
+    updateSupplierExcludeStatus();
+
+    toggleBtn.addEventListener('click', function () {
+      panel.hidden = !panel.hidden;
+    });
+
+    document.getElementById('btnSupplierExcludeSave').addEventListener('click', function () {
+      state.excludedSupplierRootsText = textarea.value;
+      updateSupplierExcludeStatus();
+      refreshAfterDataChange();
       scheduleSave();
     });
   }
@@ -678,6 +735,19 @@
   // own sales vs. its own stock, using how the model performs elsewhere
   // only as evidence that it is worth reordering)
   // ---------------------------------------------------------------------
+  // Which single OTHER branch sold the most of this model, and how much —
+  // shown as a report column so a low-balance branch can see where demand
+  // is concentrated (e.g. "فرع البديعة باع 15 حبة").
+  function topOtherBranch(r, branchCode) {
+    var top = null;
+    BRANCHES.forEach(function (b) {
+      if (b.code === branchCode) return;
+      var qty = Number(r[branchField(b.code, 'SoldQty')]) || 0;
+      if (!top || qty > top.qty) top = { name: b.name, qty: qty };
+    });
+    return top;
+  }
+
   function computeBranchReportRows(branchCode, includeExcluded) {
     var rows = includeExcluded ? state.rows : reportableRows();
     var settings = state.settings;
@@ -685,6 +755,7 @@
       var soldHere = Number(r[branchField(branchCode, 'SoldQty')]) || 0;
       var balanceHere = Number(r[branchField(branchCode, 'Balance')]) || 0;
       var soldElsewhere = (r.TotalQtySold || 0) - soldHere;
+      var topOther = topOtherBranch(r, branchCode);
       // "Selling well" looks at total sales across ALL branches (not just
       // this branch or just the others in isolation) so a model that sells
       // steadily split across branches still counts — e.g. 4 here + 14
@@ -726,7 +797,8 @@
 
       return {
         row: r, soldHere: soldHere, soldElsewhere: soldElsewhere, balanceHere: balanceHere,
-        status: status, statusLabel: statusLabel
+        status: status, statusLabel: statusLabel,
+        topOtherBranchName: topOther.qty > 0 ? topOther.name : null, topOtherBranchQty: topOther.qty
       };
     }).sort(function (a, b) {
       var order = { critical: 0, warning: 1, opportunity: 2, surplus: 3, ok: 4, excluded: 5 };
@@ -752,10 +824,11 @@
   function buildSupplierDirectory() {
     var seen = {};
     var list = [];
+    var permExcluded = permanentlyExcludedSupplierRoots();
     state.rows.forEach(function (r) {
       if (!r.SupplierCode) return;
       var root = resolveSupplierCode(r.SupplierCode);
-      if (seen[root]) return;
+      if (seen[root] || permExcluded[root]) return;
       seen[root] = true;
       var info = supplierGroupInfo(r);
       list.push({ root: root, name: info.name || r.SupplierName || root, codesText: info.codesText });
@@ -931,10 +1004,19 @@
   function branchReportData(branchCode) {
     var supplierFilterActive = !allSuppliersSelected;
     var categoryFilterActive = !allCategoriesSelected;
+    var permExcluded = permanentlyExcludedSupplierRoots();
+    var minPrice = state.minPriceFilter;
+    var minSoldPerBranch = Number(state.minSoldPerBranchFilter) || 0;
     var data = computeBranchReportRows(branchCode, false).filter(function (d) {
       if (d.status !== 'critical' && d.status !== 'warning' && d.status !== 'opportunity') return false;
       if (supplierFilterActive && !selectedSupplierRoots[resolveSupplierCode(d.row.SupplierCode)]) return false;
       if (categoryFilterActive && excludedCategories[(d.row.StockGroupName || '').trim()]) return false;
+      if (permExcluded[resolveSupplierCode(d.row.SupplierCode)]) return false;
+      if (minPrice != null && (Number(d.row.UnitPrice) || 0) < minPrice) return false;
+      // Opportunity items are by definition never sold in this branch
+      // (soldHere is always 0), so this threshold doesn't apply to them —
+      // otherwise it would silently wipe out the whole "فرصة جديدة" section.
+      if (minSoldPerBranch > 0 && d.status !== 'opportunity' && d.soldHere < minSoldPerBranch) return false;
       return true;
     });
     // Ascending by (merged) supplier code, then descending by quantity sold
@@ -960,7 +1042,7 @@
 
     var rowsHtml;
     if (!data.length) {
-      rowsHtml = '<tr><td colspan="6" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+      rowsHtml = '<tr><td colspan="8" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     } else {
       rowsHtml = data.map(function (d) {
         var r = d.row;
@@ -972,6 +1054,8 @@
           '<td class="num">' + price + '</td>' +
           '<td class="num">' + d.soldHere + '</td>' +
           '<td class="num">' + d.balanceHere + '</td>' +
+          '<td class="num">' + d.soldElsewhere + '</td>' +
+          '<td>' + (d.topOtherBranchName ? escapeAttr(d.topOtherBranchName + ' (' + d.topOtherBranchQty + ')') : '—') + '</td>' +
           '<td><span class="status-label ' + d.status + '">' + escapeAttr(STATUS_META[d.status] || d.statusLabel) + '</span></td>' +
           '</tr>';
       }).join('');
@@ -985,7 +1069,8 @@
       '<p class="report-summary">' + summary + '</p>' +
       '<div class="report-preview-wrap">' +
         '<table class="report-preview-table">' +
-          '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th><th class="num">الرصيد</th><th>الحالة</th></tr></thead>' +
+          '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th><th class="num">الرصيد</th>' +
+          '<th class="num">إجمالي باقي الفروع</th><th>الأكثر مبيعًا بفرع آخر</th><th>الحالة</th></tr></thead>' +
           '<tbody>' + rowsHtml + '</tbody>' +
         '</table>' +
       '</div>' +
@@ -1075,6 +1160,25 @@
   });
 
   // ---------------------------------------------------------------------
+  // Report filters — minimum item price and minimum sold-per-branch. Both
+  // default to "no filter" (empty price field, 0 for the sold threshold).
+  // ---------------------------------------------------------------------
+  function initReportFilterInputs() {
+    var priceEl = document.getElementById('minPriceFilter');
+    var soldEl = document.getElementById('minSoldPerBranchFilter');
+    priceEl.value = state.minPriceFilter == null ? '' : state.minPriceFilter;
+    soldEl.value = state.minSoldPerBranchFilter || '';
+    priceEl.addEventListener('change', function () {
+      state.minPriceFilter = priceEl.value === '' ? null : Number(priceEl.value);
+      scheduleSave();
+    });
+    soldEl.addEventListener('change', function () {
+      state.minSoldPerBranchFilter = soldEl.value === '' ? 0 : Number(soldEl.value);
+      scheduleSave();
+    });
+  }
+
+  // ---------------------------------------------------------------------
   // Add row / Reset
   // ---------------------------------------------------------------------
   document.getElementById('btnAddRow').addEventListener('click', function () {
@@ -1088,10 +1192,18 @@
   document.getElementById('btnReset').addEventListener('click', function () {
     if (confirm('سيتم مسح كل البيانات الحالية نهائيًا من هذا المتصفح. متابعة؟')) {
       try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* legacy key, best-effort */ }
-      state = { rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS), supplierAliasText: DEFAULT_SUPPLIER_ALIAS_TEXT };
+      state = {
+        rows: [], dateFrom: '', dateTo: '', settings: Object.assign({}, DEFAULT_SETTINGS),
+        supplierAliasText: DEFAULT_SUPPLIER_ALIAS_TEXT, excludedSupplierRootsText: DEFAULT_EXCLUDED_SUPPLIER_TEXT,
+        minPriceFilter: null, minSoldPerBranchFilter: 0
+      };
       rebuildSupplierAliasMap();
       document.getElementById('supplierAliasInput').value = state.supplierAliasText;
+      document.getElementById('supplierExcludeInput').value = state.excludedSupplierRootsText;
+      document.getElementById('minPriceFilter').value = '';
+      document.getElementById('minSoldPerBranchFilter').value = '';
       updateSupplierMergeStatus();
+      updateSupplierExcludeStatus();
       renderAll();
       scheduleSave();
     }
@@ -1372,12 +1484,15 @@
     return data.map(function (d) {
       var r = d.row;
       var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
+      var topOtherText = d.topOtherBranchName ? (d.topOtherBranchName + ' (' + d.topOtherBranchQty + ')') : '—';
       return '<tr>' +
         '<td>' + desc + '</td>' +
         '<td>' + pdfSupplierCellHtml(r) + '</td>' +
         '<td class="p-td-num">' + fmtPrice(r.UnitPrice) + '</td>' +
         '<td class="p-td-num">' + d.soldHere + '</td>' +
         '<td class="p-td-num">' + d.balanceHere + '</td>' +
+        '<td class="p-td-num">' + d.soldElsewhere + '</td>' +
+        '<td>' + escapeAttr(topOtherText) + '</td>' +
         '<td>' + escapeAttr(PDF_STATUS_LABELS[d.status] || d.statusLabel) + '</td>' +
         '</tr>';
     }).join('');
@@ -1386,15 +1501,16 @@
   function buildBranchPrintHtml(branch, data) {
     var rowsHtml = data.length
       ? buildPrintRowsHtml(data)
-      : '<tr><td colspan="6" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+      : '<tr><td colspan="8" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     return '<div class="p-page">' +
       '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
         ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
       '<p class="p-meta">مرتب تصاعديًا حسب كود المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع. يشمل فقط: لا يوجد رصيد، رصيد منخفض، فرصة جديدة.</p>' +
       '<table class="p-table">' +
-        '<colgroup><col style="width:24%"><col style="width:27%"><col style="width:9%"><col style="width:12%"><col style="width:10%"><col style="width:18%"></colgroup>' +
-        '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th><th>الحالة</th></tr></thead>' +
+        '<colgroup><col style="width:19%"><col style="width:21%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:10%"><col style="width:12%"><col style="width:13%"></colgroup>' +
+        '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
+        '<th class="p-td-num">إجمالي باقي الفروع</th><th>الأكثر مبيعًا بفرع آخر</th><th>الحالة</th></tr></thead>' +
         '<tbody>' + rowsHtml + '</tbody>' +
       '</table>' +
     '</div>';
@@ -1456,7 +1572,9 @@
   load().then(function () {
     initTheme();
     initSupplierMergePanel();
+    initSupplierExcludePanel();
     initFilterDropdowns();
+    initReportFilterInputs();
     renderAll();
   });
 })();
