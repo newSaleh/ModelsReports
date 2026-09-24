@@ -353,48 +353,121 @@ table#dataTable tfoot td {
 }
 
 @media print {
-  .app-header, .toolbar, .tabs, .app-footer, .save-indicator { display: none; }
+  html, body { background: #fff !important; }
+  body.printing #printArea { display: block !important; }
+  body.printing > *:not(#printArea) { display: none !important; }
 }
 
 /* ---------------------------------------------------------------------
-   Hidden PDF render root. html2canvas needs the element actually laid
-   out (not display:none), so it is pushed off-screen instead of hidden.
-   Pages are captured one at a time then removed.
+   PDF export — native browser print. #printArea is empty/hidden on
+   screen; body.printing (set only while window.print() runs) swaps it
+   in as the only visible thing, per the @media print rules above.
 --------------------------------------------------------------------- */
-#pdfRoot {
-  position: fixed; top: 0; left: -100000px; z-index: -1;
-}
-.pdf-page {
-  width: 794px;
-  background: #ffffff;
-  color: #111111;
-  font-family: 'NotoNaskhArabicPdf', 'system-ui', sans-serif;
-  padding: 26px 24px;
+#printArea { display: none; }
+
+.p-page {
   direction: rtl;
+  color: #111;
+  font-family: 'Segoe UI', Tahoma, Arial, 'Noto Sans Arabic', sans-serif;
 }
-.pdf-page * { box-sizing: border-box; }
-.pdf-page h1.pdf-title { font-size: 18px; margin: 0 0 5px; }
-.pdf-page p.pdf-sub { font-size: 11px; color: #444; margin: 0 0 3px; }
-.pdf-page .pdf-meta { margin-bottom: 10px; }
-.pdf-page table.pdf-table { width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed; }
-.pdf-page table.pdf-table th {
-  background: #2a78d6; color: #fff; text-align: right; padding: 5px 7px; font-size: 10px;
+.p-title { font-size: 18px; margin: 0 0 5px; border-bottom: 1.5px solid #000; padding-bottom: 6px; }
+.p-meta { font-size: 11px; color: #444; margin: 0 0 4px; }
+.p-table { width: 100%; border-collapse: collapse; font-size: 10.5px; table-layout: fixed; margin-top: 10px; }
+.p-table th, .p-table td {
+  border: 1px solid #999; padding: 5px 7px; text-align: right;
+  word-wrap: break-word; overflow-wrap: break-word; vertical-align: middle; line-height: 1.4;
 }
-.pdf-page table.pdf-table td {
-  border-bottom: 1px solid #e1e0d9; padding: 4px 7px; text-align: right;
-  word-wrap: break-word; overflow-wrap: break-word; vertical-align: middle; line-height: 1.5;
+.p-table thead th { background: #2a78d6; color: #fff; font-weight: 700; }
+.p-table tbody tr:nth-child(even) td { background: #f7f7f5; }
+.p-table tbody tr { break-inside: avoid; page-break-inside: avoid; }
+.p-td-num { text-align: center; font-variant-numeric: tabular-nums; }
+.p-td-suppliercode { font-size: 0.82em; color: #555; }
+.p-empty { font-style: italic; text-align: center; color: #666; }
+
+/* ---------------------------------------------------------------------
+   Simple linear report flow (upload/paste -> suppliers -> dates ->
+   categories -> generate) — a stack of cards, one step per card.
+--------------------------------------------------------------------- */
+.flow-card { max-width: 760px; margin-left: auto; margin-right: auto; }
+.flow-card + .flow-card { margin-top: 14px; }
+
+.field { margin-bottom: 12px; }
+.field:last-child { margin-bottom: 0; }
+.field label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.88rem; color: var(--text-primary); }
+
+input[type="file"],
+input[type="text"].dropdown-search,
+#pasteArea,
+#searchBox {
+  width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2); color: var(--text-primary); font-family: var(--font); font-size: 0.9rem;
 }
-.pdf-page table.pdf-table td.num, .pdf-page table.pdf-table th.num { text-align: center; }
-.pdf-page table.pdf-table tr:nth-child(even) td { background: #f7f7f5; }
-.pdf-page table.pdf-table td.pdf-supplier-cell { color: #555; font-size: 9px; }
-.pdf-page .pdf-supplier-code { font-size: 0.82em; }
-.pdf-page .pdf-status { font-size: 9px; padding: 2px 5px; border-radius: 999px; display: inline-block; white-space: normal; line-height: 1.35; }
-.pdf-page .pdf-status.critical { background: #fbe2e2; color: #a12727; }
-.pdf-page .pdf-status.warning { background: #fdedcf; color: #8a6100; }
-.pdf-page .pdf-status.opportunity { background: #d9f2d9; color: #0b6e0b; }
-.pdf-page .pdf-status.surplus { background: #dce8f8; color: #1c5cab; }
-.pdf-page .pdf-status.ok { background: #eeeeec; color: #52514e; }
-.pdf-page .pdf-footer { margin-top: 10px; font-size: 11px; color: #888; text-align: center; }
-.pdf-page.pdf-page-fixed { height: 1122px; overflow: hidden; position: relative; }
-.pdf-page .pdf-header-block { margin-bottom: 10px; }
-.pdf-page .pdf-page-num { margin-top: 10px; font-size: 10.5px; color: #999; text-align: center; }
+#pasteArea { resize: vertical; direction: ltr; text-align: left; font-family: Consolas, monospace; font-size: 0.82rem; }
+
+.divider-text { text-align: center; color: var(--text-muted); margin: 12px 0; font-size: 0.85rem; }
+
+.hint { color: var(--text-muted); font-size: 0.8rem; margin: 6px 0 0; }
+.status { font-size: 0.85rem; color: var(--text-secondary); margin: 10px 0 0; min-height: 1.2em; }
+
+.date-fields { display: flex; gap: 16px; flex-wrap: wrap; }
+.date-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--text-secondary); }
+.date-fields input {
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+  background: var(--surface-2); color: var(--text-primary); font-family: var(--font);
+}
+
+/* Searchable multi-select dropdown (suppliers/categories) */
+.dropdown-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2); color: var(--text-primary); font-family: var(--font); font-size: 0.9rem;
+  cursor: pointer; text-align: right;
+}
+.dropdown-toggle:hover { border-color: var(--series-1); }
+.dropdown-caret { color: var(--text-muted); margin-inline-start: 8px; }
+
+.dropdown-panel { margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); padding: 10px; }
+.dropdown-panel[hidden] { display: none; }
+.dropdown-panel input.dropdown-search,
+.dropdown-panel > input[type="text"] {
+  margin-bottom: 8px;
+}
+
+.dropdown-actions { display: flex; gap: 8px; margin: 0 0 8px; }
+.dropdown-actions button {
+  flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--page-plane); color: var(--series-1); font-size: 0.8rem; cursor: pointer; font-family: var(--font);
+}
+.dropdown-actions button:hover { filter: brightness(0.97); }
+
+.check-list { max-height: 260px; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 6px; }
+.check-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 6px;
+  font-size: 0.86rem; cursor: pointer; color: var(--text-primary);
+}
+.check-item:hover { background: var(--page-plane); }
+.check-item input { flex-shrink: 0; }
+.check-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check-item.no-match { display: none; }
+
+.generate-card { text-align: center; }
+.btn-large { padding: 12px 32px; font-size: 1rem; }
+
+/* Report result cards */
+.report-card { max-width: 100%; }
+.report-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.report-head h2 { margin: 0; font-size: 1rem; }
+.report-summary { color: var(--text-secondary); font-size: 0.85rem; margin: 0 0 12px; }
+.report-preview-wrap { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+table.report-preview-table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+table.report-preview-table thead th {
+  position: sticky; top: 0; background: var(--surface-1); z-index: 1;
+  border-bottom: 1px solid var(--border); padding: 8px 10px; color: var(--text-secondary);
+  font-weight: 600; text-align: right; white-space: nowrap;
+}
+table.report-preview-table tbody td {
+  border-bottom: 1px solid var(--gridline); padding: 7px 10px; text-align: right; vertical-align: top; line-height: 1.4;
+}
+table.report-preview-table td.num, table.report-preview-table th.num { text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.report-preview-table tbody tr:hover { background: rgba(42,120,214,0.06); }
+

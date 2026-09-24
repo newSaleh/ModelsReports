@@ -26,9 +26,10 @@
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
   var DEFAULT_SETTINGS = {
-    hotSoldMin: 5,               // minimum weekly sales in a branch to call it "selling well"
-    minBalance: 7,               // current balance below this (while selling well) -> needs a reorder
+    hotSoldMin: 5,               // minimum sales in a branch to call it "selling well"
     opportunityMinTotalSold: 20, // sold this well elsewhere to justify stocking a new branch
+    adequateMinBalance: 8,       // balance at/above this, with low sell-through (see below), needs no reorder
+    adequateSellThroughRatio: 0.5, // sold less than this fraction of current balance -> stock is holding, not depleting
     maxBalance: 50               // current balance above this -> flagged as overstock/surplus
   };
 
@@ -143,8 +144,6 @@
   };
 
   var searchTerm = '';
-  var statusFilter = 'all';
-  var selectedBranch = BRANCHES[0].code;
   // supplierGroupRootOf: normalized code -> normalized root code of its group.
   // supplierGroupKnownCodes: root -> sorted list of every normalized code
   //   known to belong to that group (from the built-in tables and/or the
@@ -477,66 +476,10 @@
     }).join('');
   }
 
-  function renderBranchSelect() {
-    var el = document.getElementById('branchSelect');
-    var opts = BRANCHES.map(function (b) {
-      return '<option value="' + b.code + '">' + b.code + ' - ' + b.name + '</option>';
-    }).join('');
-    opts += '<option value="all">كل الفروع (تقرير شامل)</option>';
-    el.innerHTML = opts;
-    el.value = selectedBranch;
-    el.addEventListener('change', function () {
-      selectedBranch = el.value;
-      statusFilter = 'all';
-      renderDashboard();
-    });
-  }
-
   // ---------------------------------------------------------------------
-  // Settings panel (user-adjustable "what counts as adequate stock")
-  // ---------------------------------------------------------------------
-  function initSettingsPanel() {
-    var panel = document.getElementById('settingsPanel');
-    var toggleBtn = document.getElementById('btnSettingsToggle');
-    var hotEl = document.getElementById('setHotSoldMin');
-    var minBalEl = document.getElementById('setMinBalance');
-    var oppEl = document.getElementById('setOpportunityMin');
-    var maxBalEl = document.getElementById('setMaxBalance');
-
-    function syncInputs() {
-      hotEl.value = state.settings.hotSoldMin;
-      minBalEl.value = state.settings.minBalance;
-      oppEl.value = state.settings.opportunityMinTotalSold;
-      maxBalEl.value = state.settings.maxBalance;
-    }
-    syncInputs();
-
-    toggleBtn.addEventListener('click', function () {
-      panel.hidden = !panel.hidden;
-    });
-
-    function onChange() {
-      var hot = Number(hotEl.value); if (!isFinite(hot) || hot < 0) hot = DEFAULT_SETTINGS.hotSoldMin;
-      var minBal = Number(minBalEl.value); if (!isFinite(minBal) || minBal < 0) minBal = DEFAULT_SETTINGS.minBalance;
-      var opp = Number(oppEl.value); if (!isFinite(opp) || opp < 0) opp = DEFAULT_SETTINGS.opportunityMinTotalSold;
-      var maxBal = Number(maxBalEl.value); if (!isFinite(maxBal) || maxBal < 0) maxBal = DEFAULT_SETTINGS.maxBalance;
-      if (maxBal < minBal) maxBal = minBal;
-      state.settings = { hotSoldMin: hot, minBalance: minBal, opportunityMinTotalSold: opp, maxBalance: maxBal };
-      renderDashboard();
-      scheduleSave();
-    }
-    hotEl.addEventListener('change', onChange);
-    minBalEl.addEventListener('change', onChange);
-    oppEl.addEventListener('change', onChange);
-    maxBalEl.addEventListener('change', onChange);
-
-    document.getElementById('btnSettingsReset').addEventListener('click', function () {
-      state.settings = Object.assign({}, DEFAULT_SETTINGS);
-      syncInputs();
-      renderDashboard();
-      scheduleSave();
-    });
-  }
+  // Settings panel removed — the stock-adequacy rule now uses the fixed
+  // (documented) thresholds in DEFAULT_SETTINGS: adequateMinBalance (8) and
+  // adequateSellThroughRatio (50%). No dedicated UI for tuning them yet.
 
   // ---------------------------------------------------------------------
   // Supplier code merge panel
@@ -575,62 +518,9 @@
       state.supplierAliasText = textarea.value;
       rebuildSupplierAliasMap();
       updateSupplierMergeStatus();
-      renderDashboard();
-      renderTableBody();
+      refreshAfterDataChange();
+      renderTableIfActive();
       scheduleSave();
-    });
-  }
-
-  // ---------------------------------------------------------------------
-  // Exclude-by-supplier-code bar (shown under the classification chips) —
-  // typing a supplier reference code moves that supplier's items to
-  // "مستبعدة من التقرير" (fully excluded from the report). Scoped to
-  // whichever chip is active: a specific classification (e.g. "لا يوجد
-  // رصيد") only excludes items currently in that classification; "الكل"
-  // excludes every item from that supplier. See updateSupplierExcludeBar()
-  // for the dynamic label/enabled-state per the active chip.
-  // ---------------------------------------------------------------------
-  function initSupplierExcludeBar() {
-    var bar = document.getElementById('supplierExcludeBar');
-    var input = document.getElementById('supplierExcludeInput');
-    var statusEl = document.getElementById('supplierExcludeStatus');
-    var btn = document.getElementById('btnSupplierExclude');
-    if (!bar || !input || !btn) return;
-
-    function run() {
-      var status = bar.getAttribute('data-status');
-      if (!status || status === 'excluded' || (status !== 'all' && !STATUS_META[status])) {
-        statusEl.textContent = 'اختر تصنيفًا أولًا (أو "الكل").';
-        return;
-      }
-      var code = input.value.trim();
-      if (!code) { statusEl.textContent = 'اكتب كود المورد أولًا.'; return; }
-      var resolved = resolveSupplierCode(code);
-
-      var matches = status === 'all'
-        ? state.rows.filter(function (r) { return !r.excludedFromReport && resolveSupplierCode(r.SupplierCode) === resolved; })
-        : computeBranchReportRows(selectedBranch, true)
-          .filter(function (d) { return d.status === status && resolveSupplierCode(d.row.SupplierCode) === resolved; })
-          .map(function (d) { return d.row; });
-
-      if (!matches.length) {
-        statusEl.textContent = status === 'all'
-          ? 'لا توجد أصناف غير مستبعدة بهذا الكود.'
-          : 'لا توجد أصناف بهذا الكود ضمن هذا التصنيف حاليًا.';
-        return;
-      }
-      matches.forEach(function (r) { r.excludedFromReport = true; });
-      var name = supplierGroupDisplayName[resolved] || matches[0].SupplierName || '';
-      statusEl.textContent = 'تم استبعاد ' + matches.length + ' صنف' + (name ? (' — ' + name) : '') + ' (' + formatCodeForDisplay(resolved) + ') إلى "مستبعدة من التقرير".';
-      input.value = '';
-      renderDashboard();
-      renderTableBody();
-      scheduleSave();
-    }
-
-    btn.addEventListener('click', run);
-    input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); run(); }
     });
   }
 
@@ -664,30 +554,50 @@
     return hay.indexOf(searchTerm) !== -1;
   }
 
+  // Rendering every row of a full-catalog import (tens of thousands) into
+  // this heavily-input-per-cell table makes the DOM itself so large that
+  // Chromium's post-interaction work (hover/hit-testing) can lock up the
+  // page for a very long time the moment it becomes visible — not just a
+  // slow render. So past this many matching rows, only the first slice is
+  // shown and the user is asked to search to narrow it down instead.
+  var EDIT_TABLE_ROW_LIMIT = 500;
+
   function renderTableBody() {
     var tbody = document.getElementById('tableBody');
-    var html = '';
-    state.rows.forEach(function (r, idx) {
-      if (!rowMatchesSearch(r)) return;
-      html += '<tr data-idx="' + idx + '"' + (r.excludedFromReport ? ' class="row-excluded"' : '') + '>';
-      html += '<td>' + (idx + 1) + '</td>';
+    var matched = [];
+    state.rows.forEach(function (r, idx) { if (rowMatchesSearch(r)) matched.push(idx); });
+
+    var shown = matched.slice(0, EDIT_TABLE_ROW_LIMIT);
+    var html = shown.map(function (idx) {
+      var r = state.rows[idx];
+      var rowHtml = '<tr data-idx="' + idx + '"' + (r.excludedFromReport ? ' class="row-excluded"' : '') + '>';
+      rowHtml += '<td>' + (idx + 1) + '</td>';
       TEXT_FIELDS.forEach(function (f) {
-        html += '<td><input class="text-cell" data-field="' + f.key + '" value="' + escapeAttr(r[f.key]) + '"></td>';
+        rowHtml += '<td><input class="text-cell" data-field="' + f.key + '" value="' + escapeAttr(r[f.key]) + '"></td>';
       });
-      html += '<td><input type="number" step="0.01" data-field="UnitPrice" value="' + (r.UnitPrice || 0) + '"></td>';
+      rowHtml += '<td><input type="number" step="0.01" data-field="UnitPrice" value="' + (r.UnitPrice || 0) + '"></td>';
       BRANCHES.forEach(function (b) {
-        html += '<td class="col-group-branch"><input type="number" data-field="' + branchField(b.code, 'SoldQty') + '" value="' + (r[branchField(b.code, 'SoldQty')] || 0) + '"></td>';
-        html += '<td><input type="number" data-field="' + branchField(b.code, 'Balance') + '" value="' + (r[branchField(b.code, 'Balance')] || 0) + '"></td>';
+        rowHtml += '<td class="col-group-branch"><input type="number" data-field="' + branchField(b.code, 'SoldQty') + '" value="' + (r[branchField(b.code, 'SoldQty')] || 0) + '"></td>';
+        rowHtml += '<td><input type="number" data-field="' + branchField(b.code, 'Balance') + '" value="' + (r[branchField(b.code, 'Balance')] || 0) + '"></td>';
       });
-      html += '<td><b>' + r.TotalQtySold + '</b></td>';
-      html += '<td><b>' + r.TotalBalance + '</b></td>';
-      html += '<td><button class="btn-del-row" data-idx="' + idx + '" title="حذف الصف">✕</button></td>';
-      html += '</tr>';
-    });
+      rowHtml += '<td><b>' + r.TotalQtySold + '</b></td>';
+      rowHtml += '<td><b>' + r.TotalBalance + '</b></td>';
+      rowHtml += '<td><button class="btn-del-row" data-idx="' + idx + '" title="حذف الصف">✕</button></td>';
+      rowHtml += '</tr>';
+      return rowHtml;
+    }).join('');
+
+    var colCount = 2 + TEXT_FIELDS.length + 1 + BRANCHES.length * 2 + 2;
     if (!state.rows.length) {
-      html = '<tr><td colspan="' + (2 + TEXT_FIELDS.length + 1 + BRANCHES.length * 2 + 2) + '" class="empty-state">' +
-        'لا توجد بيانات بعد. استخدم زر "استيراد Excel" لرفع ملف المبيعات الأسبوعي، أو "نموذج فارغ" لتنزيل قالب فارغ.' +
+      html = '<tr><td colspan="' + colCount + '" class="empty-state">' +
+        'لا توجد بيانات بعد. استخدم بطاقة "مصدر البيانات" في تبويب التقارير لرفع ملف أو لصق بيانات.' +
         '</td></tr>';
+    } else if (!matched.length) {
+      html = '<tr><td colspan="' + colCount + '" class="empty-state">لا توجد أصناف مطابقة لبحثك.</td></tr>';
+    } else if (matched.length > EDIT_TABLE_ROW_LIMIT) {
+      html += '<tr><td colspan="' + colCount + '" class="empty-state">' +
+        'تُعرض أول ' + EDIT_TABLE_ROW_LIMIT + ' من أصل ' + matched.length + ' صنفًا مطابقًا. استخدم البحث أعلاه لتضييق ' +
+        'النتائج ورؤية صنف معين (عرض آلاف الأصناف دفعة واحدة يُبطئ المتصفح كثيرًا).</td></tr>';
     }
     tbody.innerHTML = html;
 
@@ -746,7 +656,7 @@
     cells[cells.length - 3].innerHTML = '<b>' + row.TotalQtySold + '</b>';
     cells[cells.length - 2].innerHTML = '<b>' + row.TotalBalance + '</b>';
     renderTableFoot();
-    renderDashboard();
+    refreshAfterDataChange();
     scheduleSave();
   });
 
@@ -755,8 +665,8 @@
       var idx = Number(e.target.getAttribute('data-idx'));
       if (confirm('حذف هذا الصنف من التقرير؟')) {
         state.rows.splice(idx, 1);
-        renderTable();
-        renderDashboard();
+        renderTableIfActive();
+        refreshAfterDataChange();
         scheduleSave();
       }
     }
@@ -780,6 +690,12 @@
       // steadily split across branches still counts — e.g. 4 here + 14
       // elsewhere clears a threshold of 15 even though neither half alone does.
       var sellingWell = soldHere >= settings.hotSoldMin || (r.TotalQtySold || 0) >= settings.opportunityMinTotalSold;
+      // A branch holding enough units (adequateMinBalance+) that it hasn't
+      // sold through a large share of (adequateSellThroughRatio) doesn't
+      // need reordering yet, even if it otherwise "sells well" — the stock
+      // on hand is keeping up with demand.
+      var stockHolding = balanceHere >= settings.adequateMinBalance &&
+        soldHere < settings.adequateSellThroughRatio * balanceHere;
 
       var status, statusLabel;
       if (r.excludedFromReport) {
@@ -792,7 +708,7 @@
         // "restock what you already sell here".
         status = 'opportunity';
         statusLabel = 'موديل ناجح — غير متوفر لديك';
-      } else if (sellingWell && balanceHere < settings.minBalance) {
+      } else if (sellingWell && !stockHolding) {
         if (balanceHere === 0) {
           status = 'critical';
           statusLabel = 'لا يوجد رصيد — اطلب الآن';
@@ -820,250 +736,320 @@
   }
 
   // ---------------------------------------------------------------------
-  // Dashboard: KPIs + charts
+  // Supplier / category filters — searchable checklist dropdowns, same
+  // pattern as DailyModelsReports: suppliers default to "none selected"
+  // meaning "all included"; categories default to "all checked" meaning
+  // "all included", and unchecking one excludes it.
   // ---------------------------------------------------------------------
-  function renderKpis(branchData) {
-    var tiles;
-    if (selectedBranch === 'all') {
-      var totalSold = 0, totalBalance = 0;
-      var rr = reportableRows();
-      rr.forEach(function (r) { totalSold += r.TotalQtySold; totalBalance += r.TotalBalance; });
-      var top = rr.slice().sort(function (a, b) { return b.TotalQtySold - a.TotalQtySold; })[0];
-      var needsOrderAll = 0;
-      BRANCHES.forEach(function (b) {
-        needsOrderAll += computeBranchReportRows(b.code).filter(function (d) { return d.status === 'critical' || d.status === 'warning'; }).length;
-      });
-      tiles = [
-        { label: 'إجمالي القطع المباعة (كل الفروع)', value: totalSold.toLocaleString('en-US'), sub: (state.dateFrom || '') + ' → ' + (state.dateTo || '') },
-        { label: 'إجمالي الرصيد المتبقي', value: totalBalance.toLocaleString('en-US'), sub: rr.length + ' صنف بالتقرير' },
-        { label: 'أصناف تحتاج طلبًا فوريًا (كل الفروع)', value: needsOrderAll, sub: 'إجمالي عبر جميع الفروع', critical: needsOrderAll > 0 },
-        { label: 'الموديل الأفضل مبيعًا', value: top ? top.ModelCode : '—', sub: top ? (top.TotalQtySold + ' قطعة · ' + (top.StockGroupName || '')) : '' }
-      ];
-    } else {
-      var b = branchByCode(selectedBranch);
-      var soldSum = 0, balSum = 0;
-      branchData.forEach(function (d) { soldSum += d.soldHere; balSum += d.balanceHere; });
-      var needOrder = branchData.filter(function (d) { return d.status === 'critical' || d.status === 'warning'; }).length;
-      var topHere = branchData.slice().sort(function (x, y) { return y.soldHere - x.soldHere; })[0];
-      tiles = [
-        { label: 'مبيعات فرع ' + b.name, value: soldSum.toLocaleString('en-US'), sub: (state.dateFrom || '') + ' → ' + (state.dateTo || '') },
-        { label: 'الرصيد الحالي بالفرع', value: balSum.toLocaleString('en-US'), sub: branchData.length + ' صنف بالتقرير' },
-        { label: 'أصناف تحتاج طلبًا فوريًا', value: needOrder, sub: 'في فرع ' + b.name, critical: needOrder > 0 },
-        { label: 'الأفضل مبيعًا في هذا الفرع', value: (topHere && topHere.soldHere > 0) ? topHere.row.ModelCode : '—', sub: (topHere && topHere.soldHere > 0) ? (topHere.soldHere + ' قطعة · ' + (topHere.row.StockGroupName || '')) : '' }
-      ];
-    }
-    document.getElementById('kpiRow').innerHTML = tiles.map(function (t) {
-      return '<div class="kpi-tile' + (t.critical ? ' critical' : '') + '"><div class="kpi-label">' + t.label + '</div>' +
-        '<div class="kpi-value">' + t.value + '</div><div class="kpi-sub">' + t.sub + '</div></div>';
-    }).join('');
-  }
+  var supplierDirectory = [];
+  var allSuppliersSelected = true;
+  var selectedSupplierRoots = {}; // root code -> true
 
-  function barRowHtml(label, value, max, color) {
-    var pct = max > 0 ? Math.max(4, Math.round((value / max) * 100)) : 4;
-    return '<div class="bar-row" title="' + escapeAttr(label) + '">' +
-      '<div class="bar-label">' + escapeAttr(label) + '</div>' +
-      '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>' +
-      '<div class="bar-value">' + value.toLocaleString('en-US') + '</div></div>';
-  }
+  var categoryDirectory = [];
+  var allCategoriesSelected = true;
+  var excludedCategories = {}; // category name -> true
 
-  function renderTopModelsChart() {
-    var titleEl = document.getElementById('topModelsTitle');
-    var useAll = selectedBranch === 'all';
-    var b = useAll ? null : branchByCode(selectedBranch);
-    titleEl.textContent = useAll ? 'أفضل 10 موديلات مبيعًا (كل الفروع)' : 'أفضل 10 موديلات مبيعًا — فرع ' + b.name;
-
-    var sortKey = useAll ? 'TotalQtySold' : branchField(selectedBranch, 'SoldQty');
-    var top = reportableRows().slice().sort(function (x, y) { return (y[sortKey] || 0) - (x[sortKey] || 0); }).slice(0, 10);
-    var max = top.length ? (top[0][sortKey] || 0) : 0;
-    var html = top.map(function (r) {
-      return barRowHtml(r.ModelCode + ' — ' + (r.StockGroupName || ''), r[sortKey] || 0, max, 'var(--series-1)');
-    }).join('');
-    document.getElementById('chartTopModels').innerHTML = html || '<p class="empty-state">لا توجد بيانات</p>';
-  }
-
-  function renderByBranchChart() {
-    var rr = reportableRows();
-    var totals = BRANCHES.map(function (b) {
-      var sum = 0;
-      rr.forEach(function (r) { sum += Number(r[branchField(b.code, 'SoldQty')]) || 0; });
-      return { branch: b, total: sum };
+  function buildSupplierDirectory() {
+    var seen = {};
+    var list = [];
+    state.rows.forEach(function (r) {
+      if (!r.SupplierCode) return;
+      var root = resolveSupplierCode(r.SupplierCode);
+      if (seen[root]) return;
+      seen[root] = true;
+      var info = supplierGroupInfo(r);
+      list.push({ root: root, name: info.name || r.SupplierName || root, codesText: info.codesText });
     });
-    var max = Math.max.apply(null, totals.map(function (t) { return t.total; }).concat([0]));
-    var html = totals.map(function (t) {
-      return barRowHtml(t.branch.code + ' ' + t.branch.name, t.total, max, t.branch.color);
-    }).join('');
-    html += '<div class="legend-row">' + BRANCHES.map(function (b) {
-      return '<div class="legend-item"><span class="swatch" style="background:' + b.color + '"></span>' + b.name + '</div>';
-    }).join('') + '</div>';
-    document.getElementById('chartByBranch').innerHTML = html;
+    list.sort(function (a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0); });
+    return list;
   }
 
-  // ---------------------------------------------------------------------
-  // Branch report table (on-screen)
-  // ---------------------------------------------------------------------
-  function statusBadgeHtml(status, label) {
-    return '<span class="status-label ' + status + '">' + escapeAttr(label) + '</span>';
+  function buildCategoryDirectory() {
+    var seen = {};
+    var list = [];
+    state.rows.forEach(function (r) {
+      var cat = (r.StockGroupName || '').toString().trim();
+      if (!cat || seen[cat]) return;
+      seen[cat] = true;
+      list.push(cat);
+    });
+    list.sort();
+    return list;
   }
 
-  function supplierLineHtml(r) {
-    var text = supplierDisplayText(r);
-    if (!text) return '';
-    var m = /^(.*?)(\s\([^)]*\))$/.exec(text);
-    var mainPart = m ? m[1] : text;
-    var codePart = m ? m[2] : '';
-    return '<br><span style="color:var(--text-muted);font-size:0.75rem">' + escapeAttr(mainPart) +
-      (codePart ? '<span style="font-size:0.85em">' + escapeAttr(codePart) + '</span>' : '') + '</span>';
+  function updateSupplierToggleText() {
+    var el = document.getElementById('supplierDropdownToggleText');
+    if (allSuppliersSelected) { el.textContent = 'كل الموردين'; return; }
+    var count = Object.keys(selectedSupplierRoots).length;
+    if (count === 0) el.textContent = 'لم يُحدَّد أي مورد';
+    else if (count === 1) {
+      var root = Object.keys(selectedSupplierRoots)[0];
+      var found = supplierDirectory.filter(function (s) { return s.root === root; })[0];
+      el.textContent = found ? found.name : (count + ' مورد محدد');
+    } else el.textContent = count + ' موردين محددين';
   }
 
-  function renderBranchReportTable() {
-    var titleEl = document.getElementById('branchReportTitle');
-    var hintEl = document.getElementById('branchReportHint');
-    var filtersEl = document.getElementById('alertFilters');
-    var table = document.getElementById('branchReportTable');
-
-    if (selectedBranch === 'all') {
-      titleEl.textContent = 'تقرير الفرع التفصيلي';
-      hintEl.textContent = 'اختر فرعًا محددًا من القائمة أعلاه لعرض تقريره التفصيلي هنا. تصدير PDF مع اختيار "كل الفروع" سينشئ تقريرًا مستقلاً لكل فرع.';
-      filtersEl.innerHTML = '';
-      table.querySelector('thead').innerHTML = '';
-      table.querySelector('tbody').innerHTML = '';
-      updateSupplierExcludeBar(null);
+  function renderSupplierCheckList() {
+    var list = document.getElementById('supplierCheckList');
+    list.innerHTML = '';
+    if (!supplierDirectory.length) {
+      list.innerHTML = '<p class="hint">لا يوجد مورد في البيانات المستوردة بعد.</p>';
       return;
     }
+    supplierDirectory.forEach(function (s) {
+      var label = document.createElement('label');
+      label.className = 'check-item';
+      label.dataset.search = (s.name + ' ' + s.codesText).toLowerCase();
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!selectedSupplierRoots[s.root];
+      cb.addEventListener('change', function () {
+        if (cb.checked) selectedSupplierRoots[s.root] = true; else delete selectedSupplierRoots[s.root];
+        allSuppliersSelected = Object.keys(selectedSupplierRoots).length === 0;
+        updateSupplierToggleText();
+      });
+      var span = document.createElement('span');
+      span.textContent = s.name + (s.codesText ? ' (' + s.codesText + ')' : '');
+      label.appendChild(cb); label.appendChild(span);
+      list.appendChild(label);
+    });
+  }
 
-    var b = branchByCode(selectedBranch);
-    titleEl.textContent = 'تقرير فرع ' + b.name + ' (' + b.code + ') — كل صنف على حدة';
-    hintEl.textContent = 'لكل صنف: كم بِيع في هذا الفرع، وكم بِيع إجمالًا في باقي الفروع، وهل يحتاج الفرع طلب توريد الآن بناءً على رصيده الحالي.';
+  function refreshSupplierDirectory() {
+    supplierDirectory = buildSupplierDirectory();
+    allSuppliersSelected = true;
+    selectedSupplierRoots = {};
+    var search = document.getElementById('supplierSearchInput'); if (search) search.value = '';
+    renderSupplierCheckList();
+    updateSupplierToggleText();
+  }
 
-    var data = computeBranchReportRows(selectedBranch, true);
-    var counts = { all: 0, critical: 0, warning: 0, opportunity: 0, surplus: 0, ok: 0, excluded: 0 };
-    data.forEach(function (d) { counts[d.status]++; if (d.status !== 'excluded') counts.all++; });
+  function updateCategoryToggleText() {
+    var el = document.getElementById('categoryDropdownToggleText');
+    if (allCategoriesSelected) { el.textContent = 'كل الأصناف'; return; }
+    var excludedCount = Object.keys(excludedCategories).length;
+    var selectedCount = categoryDirectory.length - excludedCount;
+    el.textContent = selectedCount + ' من ' + categoryDirectory.length + ' صنفًا محددة';
+  }
 
-    var filters = [{ key: 'all', label: 'الكل (' + counts.all + ')' }].concat(
-      ['critical', 'warning', 'opportunity', 'surplus', 'ok', 'excluded'].map(function (k) {
-        return { key: k, label: STATUS_META[k] + ' (' + counts[k] + ')' };
-      })
-    );
-    var shown = statusFilter === 'all' ? data.filter(function (d) { return d.status !== 'excluded'; }) : data.filter(function (d) { return d.status === statusFilter; });
-
-    var chipsHtml = filters.map(function (f) {
-      return '<button class="chip-filter' + (statusFilter === f.key ? ' active' : '') + '" data-filter="' + f.key + '">' + f.label + '</button>';
-    }).join('');
-    if (statusFilter !== 'all' && statusFilter !== 'excluded' && shown.length) {
-      chipsHtml += '<button class="btn btn-danger-ghost bulk-exclude-btn" id="btnBulkExclude">🚫 استبعاد كل هذه الأصناف من التقرير (' + shown.length + ')</button>';
+  function renderCategoryCheckList() {
+    var list = document.getElementById('categoryCheckList');
+    list.innerHTML = '';
+    if (!categoryDirectory.length) {
+      list.innerHTML = '<p class="hint">لا يوجد صنف/فئة في البيانات المستوردة بعد.</p>';
+      return;
     }
-    if (statusFilter === 'excluded' && shown.length) {
-      chipsHtml += '<button class="btn btn-ghost bulk-restore-btn" id="btnBulkRestore">↩️ استعادة كل الأصناف المستبعدة (' + shown.length + ')</button>';
-    }
-    filtersEl.innerHTML = chipsHtml;
+    categoryDirectory.forEach(function (cat) {
+      var label = document.createElement('label');
+      label.className = 'check-item';
+      label.dataset.search = cat.toLowerCase();
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !excludedCategories[cat];
+      cb.addEventListener('change', function () {
+        if (cb.checked) delete excludedCategories[cat]; else excludedCategories[cat] = true;
+        allCategoriesSelected = Object.keys(excludedCategories).length === 0;
+        updateCategoryToggleText();
+      });
+      var span = document.createElement('span');
+      span.textContent = cat;
+      label.appendChild(cb); label.appendChild(span);
+      list.appendChild(label);
+    });
+  }
 
-    table.querySelector('thead').innerHTML = '<tr>' +
-      '<th>الصنف / الموديل</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th>' +
-      '<th class="num">مبيعات باقي الفروع</th><th class="num">الرصيد الحالي</th><th>الحالة</th><th>إجراء</th></tr>';
+  function refreshCategoryDirectory() {
+    categoryDirectory = buildCategoryDirectory();
+    allCategoriesSelected = true;
+    excludedCategories = {};
+    var search = document.getElementById('categorySearchInput'); if (search) search.value = '';
+    renderCategoryCheckList();
+    updateCategoryToggleText();
+  }
 
-    var tbody = table.querySelector('tbody');
-    if (!shown.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">لا توجد أصناف ضمن هذا التصنيف</td></tr>';
+  function refreshFilterDirectories() {
+    refreshSupplierDirectory();
+    refreshCategoryDirectory();
+  }
+
+  function initFilterDropdowns() {
+    var sToggle = document.getElementById('supplierDropdownToggle');
+    var sPanel = document.getElementById('supplierDropdownPanel');
+    sToggle.addEventListener('click', function () {
+      sPanel.hidden = !sPanel.hidden;
+      sToggle.setAttribute('aria-expanded', String(!sPanel.hidden));
+    });
+    document.getElementById('supplierSearchInput').addEventListener('input', function (e) {
+      var q = e.target.value.trim().toLowerCase();
+      Array.prototype.forEach.call(document.querySelectorAll('#supplierCheckList .check-item'), function (item) {
+        item.classList.toggle('no-match', q !== '' && (item.dataset.search || '').indexOf(q) === -1);
+      });
+    });
+    document.getElementById('selectAllSuppliersBtn').addEventListener('click', function () {
+      allSuppliersSelected = true;
+      selectedSupplierRoots = {};
+      Array.prototype.forEach.call(document.querySelectorAll('#supplierCheckList input[type="checkbox"]'), function (el) { el.checked = false; });
+      updateSupplierToggleText();
+    });
+
+    var cToggle = document.getElementById('categoryDropdownToggle');
+    var cPanel = document.getElementById('categoryDropdownPanel');
+    cToggle.addEventListener('click', function () {
+      cPanel.hidden = !cPanel.hidden;
+      cToggle.setAttribute('aria-expanded', String(!cPanel.hidden));
+    });
+    document.getElementById('categorySearchInput').addEventListener('input', function (e) {
+      var q = e.target.value.trim().toLowerCase();
+      Array.prototype.forEach.call(document.querySelectorAll('#categoryCheckList .check-item'), function (item) {
+        item.classList.toggle('no-match', q !== '' && (item.dataset.search || '').indexOf(q) === -1);
+      });
+    });
+    document.getElementById('selectAllCategoriesBtn').addEventListener('click', function () {
+      allCategoriesSelected = true;
+      excludedCategories = {};
+      Array.prototype.forEach.call(document.querySelectorAll('#categoryCheckList input[type="checkbox"]'), function (el) { el.checked = true; });
+      updateCategoryToggleText();
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!sPanel.hidden && !sPanel.contains(e.target) && !sToggle.contains(e.target)) {
+        sPanel.hidden = true; sToggle.setAttribute('aria-expanded', 'false');
+      }
+      if (!cPanel.hidden && !cPanel.contains(e.target) && !cToggle.contains(e.target)) {
+        cPanel.hidden = true; cToggle.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Report generation — 5 branch reports at once, each scoped to items
+  // that need attention only (لا يوجد رصيد / رصيد منخفض / فرصة جديدة).
+  // مخزون مناسب and فائض في المخزون are never included here.
+  // ---------------------------------------------------------------------
+  var lastGeneratedReports = null; // branchCode -> { branch, data }
+
+  function branchReportData(branchCode) {
+    var supplierFilterActive = !allSuppliersSelected;
+    var categoryFilterActive = !allCategoriesSelected;
+    var data = computeBranchReportRows(branchCode, false).filter(function (d) {
+      if (d.status !== 'critical' && d.status !== 'warning' && d.status !== 'opportunity') return false;
+      if (supplierFilterActive && !selectedSupplierRoots[resolveSupplierCode(d.row.SupplierCode)]) return false;
+      if (categoryFilterActive && excludedCategories[(d.row.StockGroupName || '').trim()]) return false;
+      return true;
+    });
+    // Ascending by (merged) supplier code, then descending by quantity sold
+    // in the rest of the branches — matches the printed report's order.
+    data.sort(function (a, b) {
+      var codeA = resolveSupplierCode(a.row.SupplierCode) || '';
+      var codeB = resolveSupplierCode(b.row.SupplierCode) || '';
+      if (codeA !== codeB) {
+        var numA = parseFloat(codeA), numB = parseFloat(codeB);
+        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+        return codeA < codeB ? -1 : 1;
+      }
+      if (b.soldElsewhere !== a.soldElsewhere) return b.soldElsewhere - a.soldElsewhere;
+      return b.soldHere - a.soldHere;
+    });
+    return data;
+  }
+
+  function buildReportCardHtml(b, data) {
+    var counts = { critical: 0, warning: 0, opportunity: 0 };
+    data.forEach(function (d) { counts[d.status]++; });
+    var summary = '🔴 ' + counts.critical + ' لا يوجد رصيد &nbsp;·&nbsp; 🟡 ' + counts.warning + ' رصيد منخفض &nbsp;·&nbsp; 🟢 ' + counts.opportunity + ' فرصة جديدة';
+
+    var rowsHtml;
+    if (!data.length) {
+      rowsHtml = '<tr><td colspan="6" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     } else {
-      tbody.innerHTML = shown.map(function (d) {
+      rowsHtml = data.map(function (d) {
         var r = d.row;
-        var ridx = state.rows.indexOf(r);
         var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
         var price = (Number(r.UnitPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        var actionBtn = d.status === 'excluded'
-          ? '<button class="row-action-btn restore" data-action="restore" data-ridx="' + ridx + '">استعادة</button>'
-          : '<button class="row-action-btn" data-action="exclude" data-ridx="' + ridx + '">استبعاد</button>';
-        return '<tr class="row-' + d.status + (d.status === 'excluded' ? ' excluded-row' : '') + '">' +
-          '<td>' + desc + supplierLineHtml(r) + '</td>' +
+        return '<tr>' +
+          '<td>' + desc + '</td>' +
+          '<td>' + escapeAttr(supplierDisplayText(r)) + '</td>' +
           '<td class="num">' + price + '</td>' +
           '<td class="num">' + d.soldHere + '</td>' +
-          '<td class="num">' + d.soldElsewhere + '</td>' +
           '<td class="num">' + d.balanceHere + '</td>' +
-          '<td>' + statusBadgeHtml(d.status, d.statusLabel) + '</td>' +
-          '<td>' + actionBtn + '</td>' +
+          '<td><span class="status-label ' + d.status + '">' + escapeAttr(STATUS_META[d.status] || d.statusLabel) + '</span></td>' +
           '</tr>';
       }).join('');
     }
 
-    updateSupplierExcludeBar(statusFilter);
+    return '<div class="panel flow-card report-card" data-branch="' + b.code + '">' +
+      '<div class="report-head">' +
+        '<h2>تقرير فرع ' + b.name + ' (' + b.code + ')</h2>' +
+        '<button class="btn pdf-btn" type="button" data-branch="' + b.code + '">📄 تصدير PDF</button>' +
+      '</div>' +
+      '<p class="report-summary">' + summary + '</p>' +
+      '<div class="report-preview-wrap">' +
+        '<table class="report-preview-table">' +
+          '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th><th class="num">الرصيد</th><th>الحالة</th></tr></thead>' +
+          '<tbody>' + rowsHtml + '</tbody>' +
+        '</table>' +
+      '</div>' +
+    '</div>';
   }
 
-  function updateSupplierExcludeBar(status) {
-    var bar = document.getElementById('supplierExcludeBar');
-    var label = document.getElementById('supplierExcludeLabel');
-    var input = document.getElementById('supplierExcludeInput');
-    var btn = document.getElementById('btnSupplierExclude');
-    if (!bar) return;
-
-    var eligible = !!(status && (status === 'all' || (STATUS_META[status] && status !== 'excluded')));
-    bar.classList.toggle('disabled', !eligible);
-    input.disabled = !eligible;
-    btn.disabled = !eligible;
-    bar.setAttribute('data-status', eligible ? status : '');
-    label.textContent = !eligible
-      ? 'لا يوجد ما يُستبعد ضمن "مستبعدة من التقرير" — اختر تصنيفًا آخر من الأعلى.'
-      : status === 'all'
-        ? 'استبعاد مورد بالكامل من التقرير — اكتب كود المورد:'
-        : 'استبعاد مورد من تصنيف "' + STATUS_META[status] + '" فقط (تنتقل أصنافه إلى "مستبعدة من التقرير") — اكتب كود المورد:';
+  // Re-runs whatever's already on screen after the underlying data changes
+  // (an edit, an add/delete row, a supplier-merge change) — refreshes the
+  // filter directories, and regenerates the report cards only if the user
+  // had already generated them at least once this session.
+  function refreshAfterDataChange() {
+    refreshFilterDirectories();
+    if (lastGeneratedReports) generateAllReports();
   }
 
-  document.addEventListener('click', function (e) {
-    if (e.target.matches('.chip-filter')) {
-      statusFilter = e.target.getAttribute('data-filter');
-      renderBranchReportTable();
+  function generateAllReports() {
+    var statusEl = document.getElementById('generateStatusMsg');
+    if (!state.rows.length) {
+      statusEl.textContent = 'لا توجد بيانات بعد. استورد ملفًا أو الصق بيانات أولًا.';
       return;
     }
-    if (e.target.matches('.bulk-exclude-btn')) {
-      var matching = computeBranchReportRows(selectedBranch, true).filter(function (d) { return d.status === statusFilter; });
-      if (!matching.length) return;
-      if (confirm('سيتم استبعاد ' + matching.length + ' صنف من التقرير دفعة واحدة. يمكنك التراجع لاحقًا لكل صنف على حدة. متابعة؟')) {
-        matching.forEach(function (d) { d.row.excludedFromReport = true; });
-        statusFilter = 'all';
-        renderDashboard();
-        renderTableBody();
-        scheduleSave();
-      }
-      return;
-    }
-    if (e.target.matches('.bulk-restore-btn')) {
-      var excludedRows = computeBranchReportRows(selectedBranch, true).filter(function (d) { return d.status === 'excluded'; });
-      if (!excludedRows.length) return;
-      excludedRows.forEach(function (d) { d.row.excludedFromReport = false; });
-      statusFilter = 'all';
-      renderDashboard();
-      renderTableBody();
-      scheduleSave();
-      return;
-    }
-    if (e.target.matches('.row-action-btn')) {
-      var ridx = Number(e.target.getAttribute('data-ridx'));
-      var action = e.target.getAttribute('data-action');
-      var row = state.rows[ridx];
-      if (!row) return;
-      row.excludedFromReport = action === 'exclude';
-      renderDashboard();
-      renderTableBody();
-      scheduleSave();
-    }
-  });
-
-  function renderDashboard() {
-    var branchData = selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch, true);
-    renderKpis(branchData);
-    renderTopModelsChart();
-    renderByBranchChart();
-    renderBranchReportTable();
+    lastGeneratedReports = {};
+    var cardsHtml = '';
+    BRANCHES.forEach(function (b) {
+      var data = branchReportData(b.code);
+      lastGeneratedReports[b.code] = { branch: b, data: data };
+      cardsHtml += buildReportCardHtml(b, data);
+    });
+    document.getElementById('reportCardsWrap').innerHTML = cardsHtml;
+    statusEl.textContent = 'تم توليد 5 تقارير — الفترة: ' + (state.dateFrom || '؟') + ' إلى ' + (state.dateTo || '؟') + '.';
   }
+
+  document.getElementById('btnGenerateReports').addEventListener('click', generateAllReports);
 
   // ---------------------------------------------------------------------
   // Tabs
   // ---------------------------------------------------------------------
+  // The edit table is expensive to build at full-catalog scale (tens of
+  // thousands of rows x ~16 inputs each) — rendering it into a display:none
+  // panel still forces the browser to lay the whole thing out the moment
+  // it becomes visible, which can freeze the tab switch for a long time.
+  // So it's rendered lazily: only while its tab is actually active, and
+  // "dirty" (needs a fresh render) is tracked instead of rendering eagerly
+  // on every data change.
+  var tableTabDirty = true;
+  function renderTableIfActive() {
+    if (document.getElementById('tab-table').classList.contains('active')) {
+      renderTable();
+      tableTabDirty = false;
+    } else {
+      tableTabDirty = true;
+    }
+  }
+
   document.querySelectorAll('.tab-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
       document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
       btn.classList.add('active');
       document.getElementById('tab-' + btn.getAttribute('data-tab')).classList.add('active');
+      if (btn.getAttribute('data-tab') === 'table' && tableTabDirty) {
+        renderTable();
+        tableTabDirty = false;
+      }
     });
   });
 
@@ -1072,14 +1058,14 @@
   // ---------------------------------------------------------------------
   document.getElementById('searchBox').addEventListener('input', function (e) {
     searchTerm = e.target.value.trim().toLowerCase();
-    renderTableBody();
+    renderTableIfActive();
   });
 
   // ---------------------------------------------------------------------
   // Date range
   // ---------------------------------------------------------------------
-  document.getElementById('dateFrom').addEventListener('change', function (e) { state.dateFrom = e.target.value; scheduleSave(); renderKpis(selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch, true)); });
-  document.getElementById('dateTo').addEventListener('change', function (e) { state.dateTo = e.target.value; scheduleSave(); renderKpis(selectedBranch === 'all' ? null : computeBranchReportRows(selectedBranch, true)); });
+  document.getElementById('dateFrom').addEventListener('change', function (e) { state.dateFrom = e.target.value; scheduleSave(); });
+  document.getElementById('dateTo').addEventListener('change', function (e) { state.dateTo = e.target.value; scheduleSave(); });
 
   // Open the native calendar picker on a single click anywhere in the field,
   // instead of requiring a precise click on the small calendar icon.
@@ -1093,8 +1079,8 @@
   // ---------------------------------------------------------------------
   document.getElementById('btnAddRow').addEventListener('click', function () {
     state.rows.unshift(blankRow());
-    renderTable();
-    renderDashboard();
+    tableTabDirty = true; // the click below will render it fresh
+    refreshAfterDataChange();
     scheduleSave();
     document.querySelector('.tab-btn[data-tab="table"]').click();
   });
@@ -1221,13 +1207,61 @@
     return order.map(function (k) { recalcRow(byKey[k]); return byKey[k]; });
   }
 
-  document.getElementById('btnImport').addEventListener('click', function () {
-    document.getElementById('fileInput').click();
-  });
+  function formatDateKeyForInput(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  // Parses text pasted from Excel (or typed/pasted by a helper bot): tab-
+  // separated if present (Excel's copy format), else comma, else falls back
+  // to runs of 2+ spaces. First line is the header row.
+  function parsePastedText(text) {
+    var lines = text.split(/\r\n|\r|\n/).filter(function (l) { return l.trim() !== ''; });
+    if (!lines.length) return [];
+    function splitLine(line) {
+      if (line.indexOf('\t') !== -1) return line.split('\t');
+      if (line.indexOf(',') !== -1) return line.split(',');
+      return line.trim().split(/\s{2,}/);
+    }
+    var headers = splitLine(lines[0]).map(function (h) { return h.trim(); });
+    return lines.slice(1).map(function (line) {
+      var cells = splitLine(line);
+      var obj = {};
+      headers.forEach(function (h, i) { obj[h] = cells[i] !== undefined ? cells[i].trim() : ''; });
+      return obj;
+    });
+  }
+
+  function finishImport(validFiles, importStatusEl) {
+    var missingDates = validFiles.filter(function (f) { return f.dateKey == null; }).length;
+    state.rows = mergeMultiDayRows(validFiles);
+
+    // Auto-fill the date range from filenames, so the report is labeled
+    // correctly without the user typing it in — still freely editable after.
+    var knownDates = validFiles.map(function (f) { return f.dateKey; }).filter(function (d) { return d != null; });
+    if (knownDates.length) {
+      state.dateFrom = formatDateKeyForInput(Math.min.apply(null, knownDates));
+      state.dateTo = formatDateKeyForInput(Math.max.apply(null, knownDates));
+    }
+
+    renderAll();
+    scheduleSave();
+
+    var msg = 'تم استيراد ' + validFiles.length + (validFiles.length > 1 ? ' أيام' : ' ملف') + ' — ' + state.rows.length + ' صنفًا.';
+    if (validFiles.length > 1) {
+      msg += ' المبيعات مُجمَّعة عبر كل الأيام، والرصيد الحالي مأخوذ من أحدث يوم فقط.';
+      if (missingDates) {
+        msg += ' تنبيه: تعذّر استنتاج التاريخ من اسم ' + missingDates + ' من الملفات، فاعتُمد ترتيب اختيارها كما هو.';
+      }
+    }
+    importStatusEl.textContent = msg;
+  }
 
   document.getElementById('fileInput').addEventListener('change', function (e) {
     var files = Array.prototype.slice.call(e.target.files || []);
+    var importStatusEl = document.getElementById('importStatusMsg');
     if (!files.length) return;
+    importStatusEl.textContent = 'جارٍ قراءة الملف' + (files.length > 1 ? 'ات' : '') + '...';
 
     Promise.all(files.map(function (file) {
       return new Promise(function (resolve, reject) {
@@ -1247,28 +1281,29 @@
     })).then(function (parsedFiles) {
       var validFiles = parsedFiles.filter(function (f) { return f.rows.length; });
       if (!validFiles.length) {
-        alert('لم يتم العثور على بيانات صالحة في الملف/الملفات. تأكد من أن الأعمدة مطابقة للنموذج.');
+        importStatusEl.textContent = 'لم يتم العثور على بيانات صالحة في الملف/الملفات. تأكد من أن الأعمدة مطابقة للنموذج.';
         return;
       }
-      state.rows = mergeMultiDayRows(validFiles);
-      renderAll();
-      scheduleSave();
-      if (validFiles.length > 1) {
-        var missingDates = validFiles.filter(function (f) { return f.dateKey == null; }).length;
-        var msg = 'تم دمج ' + validFiles.length + ' يومًا في تقرير واحد (' + state.rows.length + ' صنفًا). ' +
-          'المبيعات مُجمَّعة عبر كل الأيام، والرصيد الحالي مأخوذ من أحدث يوم فقط.';
-        if (missingDates) {
-          msg += '\n\nتنبيه: تعذّر استنتاج التاريخ من اسم ' + missingDates + ' من الملفات، فاعتُمد ترتيب اختيارها كما هو ' +
-            '(تأكد من أن آخر ملف في القائمة هو فعلاً أحدث يوم، وإلا فالرصيد المعروض سيكون من يوم غير صحيح).';
-        }
-        alert(msg);
-      }
+      finishImport(validFiles, importStatusEl);
     }).catch(function (err) {
       console.error(err);
-      alert('تعذّرت قراءة أحد الملفات. تأكد من أنها بصيغة Excel صحيحة (xlsx).');
+      importStatusEl.textContent = 'تعذّرت قراءة أحد الملفات. تأكد من أنها بصيغة Excel صحيحة (xlsx).';
     }).finally(function () {
       e.target.value = '';
     });
+  });
+
+  document.getElementById('btnUsePaste').addEventListener('click', function () {
+    var importStatusEl = document.getElementById('importStatusMsg');
+    var text = document.getElementById('pasteArea').value;
+    if (!text.trim()) { importStatusEl.textContent = 'الصق بيانات أولًا.'; return; }
+    var json = parsePastedText(text);
+    var rows = parseSheetRows(json);
+    if (!rows.length) {
+      importStatusEl.textContent = 'لم يتم العثور على بيانات صالحة في النص الملصق. تأكد من أن أول سطر هو عناوين الأعمدة.';
+      return;
+    }
+    finishImport([{ name: 'نص ملصق', dateKey: null, rows: rows }], importStatusEl);
   });
 
   function exportColumns() {
@@ -1308,290 +1343,97 @@
   });
 
   // ---------------------------------------------------------------------
-  // PDF export — rendered from real HTML/CSS via html2canvas so the
-  // browser's own (correct) Arabic text shaping and bidi layout is what
-  // ends up in the PDF. No manual character reversal, ever. Pages are
-  // paginated to real A4 size by measuring actual row heights first, so
-  // no row is ever split or clipped across a page boundary.
+  // PDF export — native browser print (window.print() + @media print),
+  // not html2canvas. The browser renders real, selectable, vector text —
+  // correct Arabic shaping/bidi comes for free, same as any normal page —
+  // and pagination is the browser's own, so this scales to reports with
+  // hundreds of rows without the multi-minute render times/huge files a
+  // screenshot-per-page approach hit at full-catalog scale.
   // ---------------------------------------------------------------------
-  var PDF_FONT_FAMILY = 'NotoNaskhArabicPdf';
-  var pdfFontReady = null;
-  // Injects the @font-face and waits for it to actually finish loading
-  // (data-URI fonts still load asynchronously) before resolving. Measuring
-  // row heights before the font is ready would use fallback-font metrics,
-  // which can be shorter than the real font and clip the last row of a page.
-  function ensurePdfFont() {
-    if (pdfFontReady) return pdfFontReady;
-    if (!window.NotoNaskhArabicBase64) { pdfFontReady = Promise.resolve(); return pdfFontReady; }
-    var style = document.createElement('style');
-    style.textContent = '@font-face{font-family:"' + PDF_FONT_FAMILY + '";' +
-      'src:url(data:font/ttf;base64,' + window.NotoNaskhArabicBase64 + ') format("truetype");' +
-      'font-weight:normal;font-style:normal;}';
-    document.head.appendChild(style);
-    if (document.fonts && document.fonts.load) {
-      pdfFontReady = document.fonts.load('16px "' + PDF_FONT_FAMILY + '"').then(function () {
-        return document.fonts.ready;
-      }).catch(function () {});
-    } else {
-      pdfFontReady = Promise.resolve();
-    }
-    return pdfFontReady;
-  }
-
-  // A4 portrait at 96 CSS px/inch (210mm x 297mm).
-  var PAGE_W = 794;
-  var PAGE_H = 1122;
-  var PAGE_PAD_V = 26;
-  var HEADER_GAP = 14;   // safety buffer for margin-collapse under the header block
-  var FOOTER_CLEARANCE = 26; // reserves room for the in-flow page-number line
-  var PAGE_SAFETY = 15;
-
   function fmtPrice(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
-  // Short one-line labels for the PDF status badge — the on-screen table
-  // keeps the longer, more explanatory statusLabel text; the PDF badge
-  // just needs the classification name to stay within its column without
-  // wrapping (the action, e.g. "اطلب الآن", is implied by the column itself).
+  // Short one-line labels — only critical/warning/opportunity ever reach
+  // print (see branchReportData), so that's all this needs to cover.
   var PDF_STATUS_LABELS = {
     critical: 'لا يوجد رصيد',
     warning: 'رصيد منخفض',
-    opportunity: 'فرصة جديدة',
-    surplus: 'فائض في المخزون',
-    ok: 'المخزون مناسب',
-    excluded: 'مستبعد'
+    opportunity: 'فرصة جديدة'
   };
-
-  function pdfStatusBadge(status) {
-    var label = PDF_STATUS_LABELS[status] || status;
-    return '<span class="pdf-status ' + status + '">' + escapeAttr(label) + '</span>';
-  }
 
   function pdfSupplierCellHtml(r) {
     var text = supplierDisplayText(r);
     if (!text) return '—';
     var m = /^(.*?)(\s\([^)]*\))$/.exec(text);
     if (!m) return escapeAttr(text);
-    return escapeAttr(m[1]) + '<span class="pdf-supplier-code">' + escapeAttr(m[2]) + '</span>';
+    return escapeAttr(m[1]) + '<span class="p-td-suppliercode">' + escapeAttr(m[2]) + '</span>';
   }
 
-  function pdfColgroupHtml() {
-    return '<colgroup>' +
-      '<col style="width:22%"><col style="width:27%"><col style="width:8%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:15%">' +
-      '</colgroup>';
-  }
-
-  function pdfTableHeadHtml(branchName) {
-    return '<thead><tr>' +
-      '<th>الصنف / الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + branchName + '</th>' +
-      '<th class="num">مبيعات باقي الفروع</th><th class="num">الرصيد الحالي</th><th>الحالة</th>' +
-      '</tr></thead>';
-  }
-
-  function pdfRowHtml(d) {
-    var r = d.row;
-    var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
-    return '<tr>' +
-      '<td>' + desc + '</td>' +
-      '<td class="pdf-supplier-cell">' + pdfSupplierCellHtml(r) + '</td>' +
-      '<td class="num">' + fmtPrice(r.UnitPrice) + '</td>' +
-      '<td class="num">' + d.soldHere + '</td>' +
-      '<td class="num">' + d.soldElsewhere + '</td>' +
-      '<td class="num">' + d.balanceHere + '</td>' +
-      '<td>' + pdfStatusBadge(d.status) + '</td>' +
-      '</tr>';
-  }
-
-  function buildBranchHeaderFirstHtml(branch) {
-    return '<div class="pdf-header-block">' +
-      '<h1 class="pdf-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
-      '<p class="pdf-sub pdf-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
-      '<p class="pdf-sub" style="margin:0">مرتب تصاعديًا حسب كود المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
-      '</div>';
-  }
-
-  function buildBranchHeaderRestHtml(branch) {
-    return '<div class="pdf-header-block">' +
-      '<h1 class="pdf-title" style="font-size:16px;margin-bottom:4px">تقرير فرع ' + branch.name + ' (' + branch.code + ') — تابع</h1>' +
-      '<p class="pdf-sub" style="margin:0">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + '</p>' +
-      '</div>';
-  }
-
-  // Measures real rendered row heights off-screen, then splits the report
-  // into as many exact-A4 pages as needed without ever cutting a row.
-  function paginateBranchReport(branch) {
-    // Sorted by supplier first — ascending by supplier code (merged-alias
-    // suppliers grouped together via their canonical code, lowest code
-    // first, e.g. 001 before 002) — then within each supplier by quantity
-    // sold in the rest of the branches, descending. This is the printed
-    // report's order, independent of the on-screen table's urgency-first
-    // ordering.
-    var rawData = computeBranchReportRows(branch.code);
-    var data = rawData.slice().sort(function (a, b) {
-      var codeA = resolveSupplierCode(a.row.SupplierCode) || '';
-      var codeB = resolveSupplierCode(b.row.SupplierCode) || '';
-      if (codeA !== codeB) {
-        var numA = parseFloat(codeA), numB = parseFloat(codeB);
-        if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
-        return codeA < codeB ? -1 : 1;
-      }
-      if (b.soldElsewhere !== a.soldElsewhere) return b.soldElsewhere - a.soldElsewhere;
-      return b.soldHere - a.soldHere;
-    });
-
-    var root = document.getElementById('pdfRoot');
-    var pages;
-
-    if (!data.length) {
-      pages = [{ isFirst: true, start: 0, end: 0 }];
-    } else {
-      var measure = document.createElement('div');
-      measure.className = 'pdf-page';
-      measure.innerHTML =
-        '<div class="measure-first">' + buildBranchHeaderFirstHtml(branch) + '</div>' +
-        '<div class="measure-rest">' + buildBranchHeaderRestHtml(branch) + '</div>' +
-        '<table class="pdf-table">' + pdfColgroupHtml() + pdfTableHeadHtml(branch.name) +
-        '<tbody>' + data.map(pdfRowHtml).join('') + '</tbody></table>';
-      root.appendChild(measure);
-
-      var headerFirstH = measure.querySelector('.measure-first').getBoundingClientRect().height + HEADER_GAP;
-      var headerRestH = measure.querySelector('.measure-rest').getBoundingClientRect().height + HEADER_GAP;
-      var theadH = measure.querySelector('thead').getBoundingClientRect().height;
-      var rowHeights = Array.prototype.map.call(measure.querySelectorAll('tbody tr'), function (tr) {
-        return tr.getBoundingClientRect().height;
-      });
-
-      root.removeChild(measure);
-
-      var contentH = PAGE_H - (2 * PAGE_PAD_V) - FOOTER_CLEARANCE - PAGE_SAFETY;
-      var budgetFirst = contentH - headerFirstH - theadH;
-      var budgetRest = contentH - headerRestH - theadH;
-
-      pages = [];
-      var i = 0, isFirst = true;
-      while (i < rowHeights.length) {
-        var budget = isFirst ? budgetFirst : budgetRest;
-        var acc = 0, start = i;
-        while (i < rowHeights.length && (i === start || acc + rowHeights[i] <= budget)) {
-          acc += rowHeights[i];
-          i++;
-        }
-        pages.push({ isFirst: isFirst, start: start, end: i });
-        isFirst = false;
-      }
-    }
-
-    var totalPages = pages.length;
-    return pages.map(function (p, pageIdx) {
-      var subset = data.slice(p.start, p.end);
-      var headerHtml = p.isFirst ? buildBranchHeaderFirstHtml(branch) : buildBranchHeaderRestHtml(branch);
-      var bodyHtml = subset.length
-        ? '<table class="pdf-table">' + pdfColgroupHtml() + pdfTableHeadHtml(branch.name) + '<tbody>' + subset.map(pdfRowHtml).join('') + '</tbody></table>'
-        : '<p class="pdf-sub">لا توجد أصناف في هذا التقرير (تم استبعاد جميع الأصناف).</p>';
-      return '<div class="pdf-page pdf-page-fixed">' + headerHtml + bodyHtml +
-        '<div class="pdf-page-num">صفحة ' + (pageIdx + 1) + ' من ' + totalPages + '</div></div>';
-    });
-  }
-
-  function buildCoverPageHtml(branchesIncluded) {
-    var totalSold = 0, totalBalance = 0, totalNeedOrder = 0;
-    var branchRowsHtml = branchesIncluded.map(function (b) {
-      var sold = 0, bal = 0, needOrder = 0;
-      var data = computeBranchReportRows(b.code);
-      data.forEach(function (d) {
-        sold += d.soldHere; bal += d.balanceHere;
-        if (d.status === 'critical' || d.status === 'warning') needOrder++;
-      });
-      totalSold += sold; totalBalance += bal; totalNeedOrder += needOrder;
-      return '<tr><td>' + b.code + ' - ' + b.name + '</td><td class="num">' + sold + '</td><td class="num">' + bal + '</td><td class="num">' + needOrder + '</td></tr>';
+  function buildPrintRowsHtml(data) {
+    return data.map(function (d) {
+      var r = d.row;
+      var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
+      return '<tr>' +
+        '<td>' + desc + '</td>' +
+        '<td>' + pdfSupplierCellHtml(r) + '</td>' +
+        '<td class="p-td-num">' + fmtPrice(r.UnitPrice) + '</td>' +
+        '<td class="p-td-num">' + d.soldHere + '</td>' +
+        '<td class="p-td-num">' + d.balanceHere + '</td>' +
+        '<td>' + escapeAttr(PDF_STATUS_LABELS[d.status] || d.statusLabel) + '</td>' +
+        '</tr>';
     }).join('');
-    branchRowsHtml += '<tr style="font-weight:700"><td>الإجمالي</td><td class="num">' + totalSold + '</td><td class="num">' + totalBalance + '</td><td class="num">' + totalNeedOrder + '</td></tr>';
-
-    return '<div class="pdf-page pdf-page-fixed">' +
-      '<h1 class="pdf-title">تقرير المبيعات الأسبوعية — جميع الفروع</h1>' +
-      '<p class="pdf-sub pdf-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') + ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
-      '<table class="pdf-table"><colgroup><col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>' +
-      '<thead><tr><th>الفرع</th><th class="num">مباع</th><th class="num">رصيد</th><th class="num">يحتاج طلبًا فوريًا</th></tr></thead>' +
-      '<tbody>' + branchRowsHtml + '</tbody></table>' +
-      '<p class="pdf-footer">الصفحات التالية: تقرير تفصيلي مستقل لكل فرع، مرتب تصاعديًا حسب كود المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع</p>' +
-      '</div>';
   }
 
-  function captureElementToImage(el) {
-    // JPEG at this scale/quality keeps text crisp while cutting file size by
-    // roughly two orders of magnitude vs. lossless PNG (which was ~20MB per
-    // page) — important since reports get shared over mobile data.
-    return html2canvas(el, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true }).then(function (canvas) {
-      return { dataUrl: canvas.toDataURL('image/jpeg', 0.8) };
-    });
+  function buildBranchPrintHtml(branch, data) {
+    var rowsHtml = data.length
+      ? buildPrintRowsHtml(data)
+      : '<tr><td colspan="6" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+    return '<div class="p-page">' +
+      '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
+      '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
+        ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
+      '<p class="p-meta">مرتب تصاعديًا حسب كود المورد، ثم تنازليًا حسب الكمية المباعة في باقي الفروع. يشمل فقط: لا يوجد رصيد، رصيد منخفض، فرصة جديدة.</p>' +
+      '<table class="p-table">' +
+        '<colgroup><col style="width:24%"><col style="width:27%"><col style="width:9%"><col style="width:12%"><col style="width:10%"><col style="width:18%"></colgroup>' +
+        '<thead><tr><th>الصنف / الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th><th>الحالة</th></tr></thead>' +
+        '<tbody>' + rowsHtml + '</tbody>' +
+      '</table>' +
+    '</div>';
   }
 
-  function setBusy(isBusy) {
-    var el = document.getElementById('busyIndicator');
-    el.classList.toggle('show', isBusy);
-    document.getElementById('btnExportPdf').disabled = isBusy;
-  }
+  var dynamicPrintStyle = document.getElementById('dynamicPrintStyle');
 
-  document.getElementById('btnExportPdf').addEventListener('click', function () {
-    generatePdf();
-  });
+  function exportBranchReportToPdf(branchCode) {
+    var entry = lastGeneratedReports && lastGeneratedReports[branchCode];
+    if (!entry) return;
+    var printArea = document.getElementById('printArea');
+    printArea.innerHTML = buildBranchPrintHtml(entry.branch, entry.data);
+    dynamicPrintStyle.textContent = '@media print { @page { size: A4 portrait; margin: 12mm; } }';
 
-  function generatePdf() {
-    if (!reportableRows().length) {
-      alert('لا توجد بيانات لتصديرها بعد (أو كل الأصناف مستبعدة من التقرير).');
-      return;
+    var previousTitle = document.title;
+    document.title = 'تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '');
+    document.body.classList.add('printing');
+
+    function cleanup() {
+      document.body.classList.remove('printing');
+      document.title = previousTitle;
+      printArea.innerHTML = '';
+      dynamicPrintStyle.textContent = '';
+      window.removeEventListener('afterprint', cleanup);
     }
-    setBusy(true);
+    window.addEventListener('afterprint', cleanup);
 
-    var root = document.getElementById('pdfRoot');
-    root.innerHTML = '';
-
-    ensurePdfFont().then(function () {
-      var branchesIncluded = selectedBranch === 'all' ? BRANCHES : [branchByCode(selectedBranch)];
-
-      // Built only after the font is confirmed loaded, so the row-height
-      // measurements inside paginateBranchReport use the real metrics.
-      var pageHtmlList = [];
-      if (selectedBranch === 'all') pageHtmlList.push(buildCoverPageHtml(branchesIncluded));
-      branchesIncluded.forEach(function (b) {
-        pageHtmlList = pageHtmlList.concat(paginateBranchReport(b));
-      });
-
-      var jsPDF = window.jspdf.jsPDF;
-      var doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-      var pageWpt = doc.internal.pageSize.getWidth();
-      var pageHpt = doc.internal.pageSize.getHeight();
-
-      // Render + capture pages sequentially (each page is injected, captured,
-      // then removed) so we never hold more than one heavy page in the DOM.
-      var chain = Promise.resolve();
-      pageHtmlList.forEach(function (html, i) {
-        chain = chain.then(function () {
-          var wrapper = document.createElement('div');
-          wrapper.innerHTML = html;
-          var pageEl = wrapper.firstChild;
-          pageEl.style.fontFamily = '"' + PDF_FONT_FAMILY + '", system-ui, sans-serif';
-          root.appendChild(pageEl);
-          return captureElementToImage(pageEl).then(function (img) {
-            root.removeChild(pageEl);
-            if (i > 0) doc.addPage();
-            doc.addImage(img.dataUrl, 'JPEG', 0, 0, pageWpt, pageHpt);
-          });
-        });
-      });
-
-      return chain.then(function () {
-        var scopeLabel = selectedBranch === 'all' ? 'كل-الفروع' : (branchByCode(selectedBranch).code + '-' + branchByCode(selectedBranch).name);
-        var fname = 'تقرير-' + scopeLabel + '-' + (state.dateFrom || '') + '_' + (state.dateTo || '') + '.pdf';
-        doc.save(fname);
-      });
-    }).then(function () {
-      setBusy(false);
-    }).catch(function (err) {
-      console.error(err);
-      alert('تعذّر إنشاء ملف PDF. حاول مرة أخرى.');
-      setBusy(false);
-    });
+    // Small delay so the layout/style applies before the print dialog opens.
+    setTimeout(function () {
+      window.print();
+      setTimeout(cleanup, 60000); // safety net if afterprint never fires
+    }, 30);
   }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest && e.target.closest('.pdf-btn');
+    if (!btn) return;
+    exportBranchReportToPdf(btn.getAttribute('data-branch'));
+  });
 
   // ---------------------------------------------------------------------
   // Boot
@@ -1600,8 +1442,8 @@
     document.getElementById('dateFrom').value = state.dateFrom || '';
     document.getElementById('dateTo').value = state.dateTo || '';
     renderLegend();
-    renderTable();
-    renderDashboard();
+    renderTableIfActive();
+    refreshFilterDirectories();
   }
 
   checkStorageWorking().then(function (ok) {
@@ -1613,10 +1455,8 @@
 
   load().then(function () {
     initTheme();
-    renderBranchSelect();
-    initSettingsPanel();
     initSupplierMergePanel();
-    initSupplierExcludeBar();
+    initFilterDropdowns();
     renderAll();
   });
 })();

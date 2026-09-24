@@ -3,146 +3,138 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>تقرير المبيعات الأسبوعية — جميع الفروع</title>
-<link rel="stylesheet" href="assets/style.css?v=13">
+<title>تقرير المبيعات — جميع الفروع</title>
+<link rel="stylesheet" href="assets/style.css?v=15">
+<style id="dynamicPrintStyle"></style>
 </head>
 <body>
 
 <div class="storage-warning-banner" id="storageWarningBanner" hidden>
-  ⚠️ متصفحك يمنع حفظ البيانات محليًا (قد يكون بسبب التصفح الخاص/المتخفي أو إعدادات الخصوصية). أي تعديل — بما في ذلك الإعدادات ودمج أكواد الموردين — لن يُحفظ بعد إغلاق الصفحة. جرّب متصفحًا آخر أو أغلق وضع التصفح الخاص.
+  ⚠️ متصفحك يمنع حفظ البيانات محليًا (قد يكون بسبب التصفح الخاص/المتخفي أو إعدادات الخصوصية). أي تعديل لن يُحفظ بعد إغلاق الصفحة. جرّب متصفحًا آخر أو أغلق وضع التصفح الخاص.
 </div>
 
 <header class="app-header">
   <div class="header-top">
     <div class="brand">
-      <h1>تقرير المبيعات الأسبوعية</h1>
-      <p class="subtitle">جميع الفروع — تحليل المبيعات والمخزون</p>
+      <h1>تقرير المبيعات</h1>
+      <p class="subtitle">جميع الفروع — أصناف تحتاج انتباهًا فقط</p>
     </div>
-    <div class="date-range">
-      <label>من
-        <input type="date" id="dateFrom">
-      </label>
-      <label>إلى
-        <input type="date" id="dateTo">
-      </label>
-      <button id="btnTheme" class="btn btn-ghost btn-theme" type="button"></button>
-    </div>
+    <button id="btnTheme" class="btn btn-ghost btn-theme" type="button"></button>
   </div>
   <div class="branch-legend" id="branchLegend"></div>
 </header>
 
 <nav class="toolbar">
   <div class="toolbar-group">
-    <button id="btnImport" class="btn btn-secondary" title="استيراد ملف واحد (أسبوع) أو عدة ملفات معًا (كل ملف = يوم، تُدمج تلقائيًا: المبيعات تُجمع وأحدث يوم هو مصدر الرصيد)">
-      <span class="icon">📂</span> استيراد Excel
-    </button>
-    <input type="file" id="fileInput" accept=".xlsx,.xls" multiple hidden>
     <button id="btnTemplate" class="btn btn-ghost" title="تنزيل نموذج فارغ بنفس الأعمدة">نموذج فارغ</button>
     <button id="btnAddRow" class="btn btn-ghost">+ إضافة صنف</button>
+    <button id="btnSupplierMergeToggle" class="btn btn-ghost">🔗 دمج أكواد الموردين</button>
   </div>
   <div class="toolbar-group toolbar-search">
-    <input type="search" id="searchBox" placeholder="بحث بالمورد / الفئة / كود الصنف / الموديل...">
+    <input type="search" id="searchBox" placeholder="بحث في جدول البيانات...">
   </div>
   <div class="toolbar-group">
-    <label class="branch-select-label">تقرير فرع:
-      <select id="branchSelect"></select>
-    </label>
-    <button id="btnExportExcel" class="btn btn-primary"><span class="icon">📊</span> تصدير Excel</button>
-    <button id="btnExportPdf" class="btn btn-primary"><span class="icon">📄</span> تصدير PDF</button>
+    <button id="btnExportExcel" class="btn btn-secondary"><span class="icon">📊</span> تصدير Excel</button>
     <button id="btnReset" class="btn btn-danger-ghost" title="مسح كل البيانات والبدء من جديد">مسح الكل</button>
   </div>
 </nav>
 
 <div class="save-indicator" id="saveIndicator">تم الحفظ ✓</div>
-<div class="save-indicator busy-indicator" id="busyIndicator">جارٍ إنشاء PDF...</div>
+
+<div class="settings-panel" id="supplierMergePanel" hidden>
+  <p class="settings-intro">أكواد موردي الرياض/جدة المعروفين تُدمج تلقائيًا في التطبيق (لا حاجة لإضافتها). إن
+    واجهت موردًا آخر له أكثر من كود مرجعي غير مدرج، أضفه هنا: زوج أكواد مفصول بفاصلة في كل سطر.
+    الأكواد المرتبطة (حتى لو عبر أكثر من زوج، مثل 0180,0555 ثم 0180,0777) تُعامَل كمورد واحد
+    تلقائيًا. يُحفظ هذا في متصفحك فقط.</p>
+  <textarea id="supplierAliasInput" dir="ltr" rows="6" placeholder="0180,0555&#10;0180,0777"></textarea>
+  <div class="supplier-merge-actions">
+    <button id="btnSupplierMergeSave" class="btn btn-primary">حفظ الدمج</button>
+    <span id="supplierMergeStatus" class="supplier-merge-status"></span>
+  </div>
+</div>
 
 <main>
   <div class="tabs">
-    <button class="tab-btn active" data-tab="dashboard">لوحة التحليل وتقرير الفرع</button>
+    <button class="tab-btn active" data-tab="dashboard">التقارير</button>
     <button class="tab-btn" data-tab="table">جدول البيانات (تعديل)</button>
   </div>
 
   <section id="tab-dashboard" class="tab-panel active">
-    <div class="kpi-row" id="kpiRow"></div>
 
-    <div class="panel-grid">
-      <div class="panel">
-        <h2 id="topModelsTitle">أفضل 10 موديلات مبيعًا</h2>
-        <div id="chartTopModels" class="chart-area"></div>
+    <div class="panel flow-card">
+      <h2>١. مصدر البيانات</h2>
+      <div class="field">
+        <label for="fileInput">رفع ملف/ملفات Excel — كل ملف يمثل يومًا واحدًا؛ اختيار عدة ملفات معًا يدمجها
+          تلقائيًا في تقرير واحد (المبيعات تُجمع عبر الأيام، والرصيد الحالي من أحدث يوم فقط)</label>
+        <input type="file" id="fileInput" accept=".xlsx,.xls" multiple>
       </div>
-      <div class="panel">
-        <h2>إجمالي المبيعات حسب الفرع</h2>
-        <div id="chartByBranch" class="chart-area"></div>
+      <div class="divider-text">أو</div>
+      <div class="field">
+        <label for="pasteArea">الصق البيانات هنا (يشمل صف العناوين، من Excel أو من بوت مساعد)</label>
+        <textarea id="pasteArea" rows="6" placeholder="انسخ الجدول والصقه هنا مباشرة..."></textarea>
+        <button id="btnUsePaste" class="btn btn-secondary" type="button">استخدام النص الملصق</button>
       </div>
+      <p class="status" id="importStatusMsg"></p>
     </div>
 
-    <div class="panel alerts-panel">
-      <div class="panel-head-row">
-        <div>
-          <h2 id="branchReportTitle">تقرير الفرع التفصيلي</h2>
-          <p class="panel-hint" id="branchReportHint"></p>
-        </div>
-        <div class="panel-head-actions">
-          <button id="btnSettingsToggle" class="btn btn-ghost">⚙️ إعدادات التقييم</button>
-          <button id="btnSupplierMergeToggle" class="btn btn-ghost">🔗 دمج أكواد الموردين</button>
-        </div>
-      </div>
-
-      <div class="settings-panel" id="settingsPanel" hidden>
-        <p class="settings-intro">أنت تحدد هنا ما هو "الرصيد المناسب" لأي صنف: بين حد أدنى (وإلا فهو رصيد ناقص) وحد أعلى (وإلا فهو فائض). عدّلها لتناسب طبيعة عملك — تُحفظ تلقائيًا.</p>
-        <div class="settings-fields-grid">
-          <div class="settings-field">
-            <label for="setHotSoldMin">الحد الأدنى للمبيعات الأسبوعية ليُعتبر الصنف "يبيع جيدًا"</label>
-            <input type="number" id="setHotSoldMin" min="0" step="1">
-            <small>مثال: لو كانت القيمة 5، فأي صنف باع 5 قطع أو أكثر هذا الأسبوع يُعتبر ناجحًا.</small>
+    <div class="panel flow-card">
+      <h2>٢. الموردون</h2>
+      <div class="field">
+        <button type="button" id="supplierDropdownToggle" class="dropdown-toggle" aria-expanded="false">
+          <span id="supplierDropdownToggleText">كل الموردين</span>
+          <span class="dropdown-caret">▾</span>
+        </button>
+        <div id="supplierDropdownPanel" class="dropdown-panel" hidden>
+          <input type="text" id="supplierSearchInput" placeholder="ابحث عن مورد...">
+          <div class="dropdown-actions">
+            <button type="button" id="selectAllSuppliersBtn">إعادة التعيين (كل الموردين)</button>
           </div>
-          <div class="settings-field">
-            <label for="setMinBalance">الحد الأدنى للرصيد المناسب (وإلا فهو رصيد ناقص)</label>
-            <input type="number" id="setMinBalance" min="0" step="1">
-            <small>أي صنف يبيع جيدًا ورصيده الحالي أقل من هذا الرقم يُعتبر "رصيدًا ناقصًا" بحاجة لطلب فوري (رصيد صفر يظهر كحالة أكثر إلحاحًا).</small>
-          </div>
-          <div class="settings-field">
-            <label for="setMaxBalance">الحد الأعلى للرصيد المناسب (وإلا فهو فائض)</label>
-            <input type="number" id="setMaxBalance" min="0" step="1">
-            <small>أي صنف رصيده الحالي في هذا الفرع أعلى من هذا الرقم يُصنَّف "فائض في المخزون"، بغض النظر عن مبيعاته.</small>
-          </div>
-          <div class="settings-field">
-            <label for="setOpportunityMin">الحد الأدنى لإجمالي مبيعات الموديل ليُعتبر ناجحًا</label>
-            <input type="number" id="setOpportunityMin" min="0" step="1">
-            <small>يُستخدم لأمرين: (1) اعتبار الموديل يبيع جيدًا إذا وصل إجمالي مبيعاته في كل الفروع لهذا الرقم حتى لو مبيعاته في هذا الفرع تحديدًا قليلة، فيصبح رصيده الناقص هنا "بحاجة لطلب فوري"، و(2) اقتراح تزويد فرع بموديل ناجح في الفروع الأخرى وغير متوفر لديه.</small>
+          <div id="supplierCheckList" class="check-list">
+            <p class="hint">ارفع البيانات أولًا لعرض قائمة الموردين.</p>
           </div>
         </div>
-        <button id="btnSettingsReset" class="btn btn-ghost">استعادة الإعدادات الافتراضية</button>
       </div>
-
-      <div class="settings-panel" id="supplierMergePanel" hidden>
-        <p class="settings-intro">أكواد موردي الرياض/جدة المعروفين تُدمج تلقائيًا في التطبيق (لا حاجة لإضافتها). إن
-          واجهت موردًا آخر له أكثر من كود مرجعي غير مدرج، أضفه هنا: زوج أكواد مفصول بفاصلة في كل سطر.
-          الأكواد المرتبطة (حتى لو عبر أكثر من زوج، مثل 0180,0555 ثم 0180,0777) تُعامَل كمورد واحد
-          تلقائيًا في البحث والتقرير وملف PDF. يُحفظ هذا في متصفحك فقط.</p>
-        <textarea id="supplierAliasInput" dir="ltr" rows="8" placeholder="0180,0555&#10;0180,0777"></textarea>
-        <div class="supplier-merge-actions">
-          <button id="btnSupplierMergeSave" class="btn btn-primary">حفظ الدمج</button>
-          <span id="supplierMergeStatus" class="supplier-merge-status"></span>
-        </div>
-      </div>
-
-      <div class="alert-filters" id="alertFilters"></div>
-      <div class="supplier-exclude-bar" id="supplierExcludeBar">
-        <div class="supplier-exclude-row">
-          <label for="supplierExcludeInput" id="supplierExcludeLabel">اكتب كود المورد:</label>
-          <input type="text" id="supplierExcludeInput" dir="ltr" placeholder="مثال: 0145">
-          <button id="btnSupplierExclude" class="btn btn-danger-ghost">استبعاد</button>
-          <span id="supplierExcludeStatus" class="supplier-exclude-status"></span>
-        </div>
-      </div>
-      <div class="branch-report-wrap">
-        <table id="branchReportTable" class="branch-report-table">
-          <thead></thead>
-          <tbody></tbody>
-        </table>
-      </div>
+      <p class="hint">اختياري — بلا تحديد يشمل كل الموردين.</p>
     </div>
+
+    <div class="panel flow-card">
+      <h2>٣. التاريخ</h2>
+      <div class="date-fields">
+        <label>من <input type="date" id="dateFrom"></label>
+        <label>إلى <input type="date" id="dateTo"></label>
+      </div>
+      <p class="hint">تُعبَّأ تلقائيًا من تواريخ أسماء الملفات المستوردة، ويمكنك تعديلها يدويًا.</p>
+    </div>
+
+    <div class="panel flow-card">
+      <h2>٤. الأصناف</h2>
+      <div class="field">
+        <button type="button" id="categoryDropdownToggle" class="dropdown-toggle" aria-expanded="false">
+          <span id="categoryDropdownToggleText">كل الأصناف</span>
+          <span class="dropdown-caret">▾</span>
+        </button>
+        <div id="categoryDropdownPanel" class="dropdown-panel" hidden>
+          <input type="text" id="categorySearchInput" placeholder="ابحث عن صنف...">
+          <div class="dropdown-actions">
+            <button type="button" id="selectAllCategoriesBtn">تحديد الكل (كل الأصناف)</button>
+          </div>
+          <div id="categoryCheckList" class="check-list">
+            <p class="hint">ارفع البيانات أولًا لعرض قائمة الأصناف.</p>
+          </div>
+        </div>
+      </div>
+      <p class="hint">افتراضيًا كل الأصناف مُضمَّنة؛ ألغِ تحديد ما لا تريد تضمينه.</p>
+    </div>
+
+    <div class="panel flow-card generate-card">
+      <button id="btnGenerateReports" class="btn btn-primary btn-large">توليد التقارير الخمسة</button>
+      <p class="status" id="generateStatusMsg"></p>
+      <p class="hint">كل تقرير يعرض فقط: لا يوجد رصيد، رصيد منخفض، وفرصة جديدة — فائض المخزون والمخزون المناسب
+        مستبعدان من كل تقرير.</p>
+    </div>
+
+    <div id="reportCardsWrap"></div>
+
   </section>
 
   <section id="tab-table" class="tab-panel">
@@ -159,15 +151,12 @@
 
 <footer class="app-footer">
   <span id="rowCount"></span>
-  <span>البيانات محفوظة في هذا المتصفح فقط (localStorage)</span>
+  <span>البيانات محفوظة في هذا المتصفح فقط</span>
 </footer>
 
-<div id="pdfRoot" aria-hidden="true"></div>
+<div id="printArea" aria-hidden="true"></div>
 
 <script src="vendor/xlsx.full.min.js"></script>
-<script src="vendor/jspdf.umd.min.js"></script>
-<script src="vendor/html2canvas.min.js"></script>
-<script src="vendor/noto-naskh-arabic-font.js"></script>
-<script src="assets/app.js?v=18"></script>
+<script src="assets/app.js?v=20"></script>
 </body>
 </html>
