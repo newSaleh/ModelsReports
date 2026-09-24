@@ -28,7 +28,7 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v36 / style v23 — 24/09/2026';
+  var APP_VERSION = 'app v37 / style v23 — 24/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
@@ -1151,7 +1151,6 @@
       rowsHtml = data.map(function (d, i) {
         var r = d.row;
         var desc = escapeAttr(r.StockGroupName || '');
-        if (d.negativeBalanceNote) desc += '<br><span class="report-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
         var price = (Number(r.UnitPrice) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         return '<tr>' +
           '<td class="num">' + (i + 1) + '</td>' +
@@ -1597,7 +1596,6 @@
     return data.map(function (d, i) {
       var r = d.row;
       var desc = escapeAttr(r.StockGroupName || '');
-      if (d.negativeBalanceNote) desc += '<br><span class="p-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
       return '<tr>' +
         '<td class="p-td-num">' + (baseIndex + i + 1) + '</td>' +
         '<td>' + desc + '</td>' +
