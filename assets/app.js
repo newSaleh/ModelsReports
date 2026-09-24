@@ -28,7 +28,7 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v32 / style v21 — 24/09/2026';
+  var APP_VERSION = 'app v33 / style v22 — 24/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
@@ -1146,7 +1146,7 @@
 
     var rowsHtml;
     if (!data.length) {
-      rowsHtml = '<tr><td colspan="10" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+      rowsHtml = '<tr><td colspan="9" class="empty-state">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     } else {
       rowsHtml = data.map(function (d, i) {
         var r = d.row;
@@ -1162,7 +1162,6 @@
           '<td class="num">' + d.soldHere + '</td>' +
           '<td class="num">' + d.balanceHere + '</td>' +
           '<td class="num">' + d.soldElsewhere + '</td>' +
-          '<td>' + (d.topOtherBranchName ? escapeAttr(d.topOtherBranchName + ' (' + d.topOtherBranchQty + ')') : '—') + '</td>' +
           '<td><span class="status-label ' + d.status + '">' + escapeAttr(STATUS_META[d.status] || d.statusLabel) + '</span></td>' +
           '</tr>';
       }).join('');
@@ -1177,7 +1176,7 @@
       '<div class="report-preview-wrap">' +
         '<table class="report-preview-table">' +
           '<thead><tr><th class="num">#</th><th>البيان</th><th>الموديل</th><th>المورد</th><th class="num">السعر</th><th class="num">مبيعات ' + b.name + '</th><th class="num">الرصيد</th>' +
-          '<th class="num">إجمالي باقي الفروع</th><th>الأكثر مبيعًا بفرع آخر</th><th>الحالة</th></tr></thead>' +
+          '<th class="num">إجمالي باقي الفروع</th><th>الحالة</th></tr></thead>' +
           '<tbody>' + rowsHtml + '</tbody>' +
         '</table>' +
       '</div>' +
@@ -1207,6 +1206,7 @@
       cardsHtml += buildReportCardHtml(b, data);
     });
     document.getElementById('reportCardsWrap').innerHTML = cardsHtml;
+    document.getElementById('exportAllBar').hidden = false;
     statusEl.textContent = 'تم توليد 5 تقارير — الفترة: ' + (state.dateFrom || '؟') + ' إلى ' + (state.dateTo || '؟') + '.';
   }
 
@@ -1595,7 +1595,6 @@
       var r = d.row;
       var desc = escapeAttr(r.StockGroupName || '');
       if (d.negativeBalanceNote) desc += '<br><span class="p-note">⚠️ ' + escapeAttr(d.negativeBalanceNote) + '</span>';
-      var topOtherText = d.topOtherBranchName ? (d.topOtherBranchName + ' (' + d.topOtherBranchQty + ' حبة)') : '—';
       return '<tr>' +
         '<td class="p-td-num">' + (i + 1) + '</td>' +
         '<td class="p-desc-cell">' + desc + '</td>' +
@@ -1605,7 +1604,6 @@
         '<td class="p-td-num">' + d.soldHere + '</td>' +
         '<td class="p-td-num">' + d.balanceHere + '</td>' +
         '<td class="p-td-num">' + d.soldElsewhere + '</td>' +
-        '<td>' + escapeAttr(topOtherText) + '</td>' +
         '<td>' + escapeAttr(PDF_STATUS_LABELS[d.status] || d.statusLabel) + '</td>' +
         '</tr>';
     }).join('');
@@ -1614,56 +1612,74 @@
   function buildBranchPrintHtml(branch, data) {
     var rowsHtml = data.length
       ? buildPrintRowsHtml(data)
-      : '<tr><td colspan="10" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
+      : '<tr><td colspan="9" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
     return '<div class="p-page">' +
       '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
         ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
       '<table class="p-table">' +
-        '<colgroup><col style="width:5%"><col style="width:11%"><col style="width:12%"><col style="width:15%"><col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:6%"><col style="width:15%"><col style="width:18%"></colgroup>' +
+        '<colgroup><col style="width:5%"><col style="width:14%"><col style="width:14%"><col style="width:18%"><col style="width:7%"><col style="width:8%"><col style="width:7%"><col style="width:8%"><col style="width:19%"></colgroup>' +
         '<thead><tr><th>#</th><th>البيان</th><th>الموديل</th><th>المورد</th><th class="p-td-num">السعر</th><th class="p-td-num">مبيعات ' + branch.name + '</th><th class="p-td-num">الرصيد</th>' +
-        '<th class="p-td-num">إجمالي باقي الفروع</th><th>أقوى فرع من الفروع الثانية</th><th>الحالة</th></tr></thead>' +
+        '<th class="p-td-num">إجمالي باقي الفروع</th><th>الحالة</th></tr></thead>' +
         '<tbody>' + rowsHtml + '</tbody>' +
       '</table>' +
     '</div>';
   }
 
-  var dynamicPrintStyle = document.getElementById('dynamicPrintStyle');
-
-  function exportBranchReportToPdf(branchCode) {
-    var entry = lastGeneratedReports && lastGeneratedReports[branchCode];
-    if (!entry) return;
+  // Shared by both the single-branch and all-branches export: fills
+  // #printArea, sets a print-friendly document title, triggers the browser
+  // print dialog, and restores everything afterward. The @page size itself
+  // is a static rule in style.css (not injected here) — declaring it from
+  // page load, instead of right before print(), removes any timing risk.
+  function printHtmlAndOpenDialog(html, printTitle) {
     var printArea = document.getElementById('printArea');
-    printArea.innerHTML = buildBranchPrintHtml(entry.branch, entry.data);
-    // Explicit physical dimensions (not the "A4" keyword) so the page size
-    // is unambiguous regardless of the browser/OS's regional default paper
-    // size (which can otherwise silently win over a size keyword).
-    dynamicPrintStyle.textContent = '@media print { @page { size: 210mm 297mm; margin: 10mm; } }';
+    printArea.innerHTML = html;
 
     var previousTitle = document.title;
-    document.title = 'تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '');
+    document.title = printTitle;
     document.body.classList.add('printing');
 
     function cleanup() {
       document.body.classList.remove('printing');
       document.title = previousTitle;
       printArea.innerHTML = '';
-      dynamicPrintStyle.textContent = '';
       window.removeEventListener('afterprint', cleanup);
     }
     window.addEventListener('afterprint', cleanup);
 
-    // Small delay so the layout/style applies before the print dialog opens.
+    // Small delay so the layout applies before the print dialog opens.
     setTimeout(function () {
       window.print();
       setTimeout(cleanup, 60000); // safety net if afterprint never fires
     }, 30);
   }
 
+  function exportBranchReportToPdf(branchCode) {
+    var entry = lastGeneratedReports && lastGeneratedReports[branchCode];
+    if (!entry) return;
+    printHtmlAndOpenDialog(
+      buildBranchPrintHtml(entry.branch, entry.data),
+      'تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '')
+    );
+  }
+
+  // All 5 branches concatenated into one print job. Each branch's .p-page
+  // forces a page break before it (see style.css) so the next branch always
+  // starts at the top of a fresh page, even if the previous one ran long.
+  function exportAllBranchesToPdf() {
+    if (!lastGeneratedReports) return;
+    var html = BRANCHES.map(function (b) {
+      var entry = lastGeneratedReports[b.code];
+      return entry ? buildBranchPrintHtml(entry.branch, entry.data) : '';
+    }).join('');
+    printHtmlAndOpenDialog(html, 'تقارير كل الفروع ' + (state.dateFrom || '') + '-' + (state.dateTo || ''));
+  }
+
   document.addEventListener('click', function (e) {
     var btn = e.target.closest && e.target.closest('.pdf-btn');
     if (!btn) return;
-    exportBranchReportToPdf(btn.getAttribute('data-branch'));
+    if (btn.id === 'btnExportAllPdf') exportAllBranchesToPdf();
+    else exportBranchReportToPdf(btn.getAttribute('data-branch'));
   });
 
   // ---------------------------------------------------------------------

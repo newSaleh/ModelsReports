@@ -4,8 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>تقرير المبيعات — جميع الفروع</title>
-<link rel="stylesheet" href="assets/style.css?v=21">
-<style id="dynamicPrintStyle"></style>
+<link rel="stylesheet" href="assets/style.css?v=22">
 </head>
 <body>
 
@@ -158,6 +157,10 @@
         مستبعدان من كل تقرير.</p>
     </div>
 
+    <div id="exportAllBar" class="export-all-bar" hidden>
+      <button id="btnExportAllPdf" class="btn pdf-btn" type="button">📄 تصدير PDF لكل الفروع (ملف واحد)</button>
+    </div>
+
     <div id="reportCardsWrap"></div>
 
   </section>
@@ -183,6 +186,6 @@
 <div id="printArea" aria-hidden="true"></div>
 
 <script src="vendor/xlsx.full.min.js"></script>
-<script src="assets/app.js?v=32"></script>
+<script src="assets/app.js?v=33"></script>
 </body>
 </html>

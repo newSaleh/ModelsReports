@@ -360,6 +360,12 @@ table#dataTable tfoot td {
   html, body { background: #fff !important; }
   body.printing #printArea { display: block !important; }
   body.printing > *:not(#printArea) { display: none !important; }
+  /* Explicit physical dimensions (not the "A4" keyword) so the page size
+     is unambiguous. Declared here (static, present from page load) rather
+     than injected via JS right before print() — a browser that remembers a
+     different paper size from a previous print job on another site can
+     otherwise still win over a size set dynamically at the last moment. */
+  @page { size: 210mm 297mm; margin: 10mm; }
 }
 
 /* ---------------------------------------------------------------------
@@ -374,6 +380,10 @@ table#dataTable tfoot td {
   color: #000;
   font-family: 'Segoe UI', Tahoma, Arial, 'Noto Sans Arabic', sans-serif;
 }
+/* When several branches are printed together (export-all), each one starts
+   on its own fresh page — never partway down a page the previous branch's
+   table happened to run into. The first page needs no break before it. */
+.p-page + .p-page { break-before: page; page-break-before: always; }
 .p-title { font-size: 19px; margin: 0 0 4px; border-bottom: 1.5px solid #000; padding-bottom: 5px; }
 .p-meta { font-size: 11px; color: #000; margin: 0 0 3px; }
 /* table-layout: fixed keeps the table bounded to the A4 page width (auto
@@ -466,6 +476,7 @@ input[type="text"].dropdown-search,
 
 .generate-card { text-align: center; }
 .btn-large { padding: 12px 32px; font-size: 1rem; }
+.export-all-bar { text-align: center; margin: -8px 0 16px; }
 
 /* Report result cards */
 .report-card { max-width: 100%; }
