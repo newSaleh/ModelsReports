@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>تقرير المبيعات الأسبوعية — جميع الفروع</title>
-<link rel="stylesheet" href="assets/style.css?v=12">
+<link rel="stylesheet" href="assets/style.css?v=13">
 </head>
 <body>
 
@@ -116,10 +116,11 @@
       </div>
 
       <div class="settings-panel" id="supplierMergePanel" hidden>
-        <p class="settings-intro">إذا كان لمورد واحد أكثر من كود مرجعي، اكتب كل الأكواد الخاصة بنفس المورد هنا: زوج
-          أكواد مفصول بفاصلة في كل سطر. الأكواد المرتبطة (حتى لو عبر أكثر من زوج، مثل 0666,0418 ثم
-          0666,0999) تُعامَل كمورد واحد تلقائيًا في البحث والتقرير وملف PDF. يُحفظ هذا في متصفحك فقط.</p>
-        <textarea id="supplierAliasInput" dir="ltr" rows="8" placeholder="0180,0252&#10;0666,0418&#10;0666,0999"></textarea>
+        <p class="settings-intro">أكواد موردي الرياض/جدة المعروفين تُدمج تلقائيًا في التطبيق (لا حاجة لإضافتها). إن
+          واجهت موردًا آخر له أكثر من كود مرجعي غير مدرج، أضفه هنا: زوج أكواد مفصول بفاصلة في كل سطر.
+          الأكواد المرتبطة (حتى لو عبر أكثر من زوج، مثل 0180,0555 ثم 0180,0777) تُعامَل كمورد واحد
+          تلقائيًا في البحث والتقرير وملف PDF. يُحفظ هذا في متصفحك فقط.</p>
+        <textarea id="supplierAliasInput" dir="ltr" rows="8" placeholder="0180,0555&#10;0180,0777"></textarea>
         <div class="supplier-merge-actions">
           <button id="btnSupplierMergeSave" class="btn btn-primary">حفظ الدمج</button>
           <span id="supplierMergeStatus" class="supplier-merge-status"></span>
@@ -167,6 +168,6 @@
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="vendor/html2canvas.min.js"></script>
 <script src="vendor/noto-naskh-arabic-font.js"></script>
-<script src="assets/app.js?v=15"></script>
+<script src="assets/app.js?v=16"></script>
 </body>
 </html>

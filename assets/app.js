@@ -32,9 +32,89 @@
     maxBalance: 50               // current balance above this -> flagged as overstock/surplus
   };
 
-  // Default supplier-code merge list — empty; the user configures this
-  // themselves from the "🔗 دمج أكواد الموردين" panel, saved to their browser.
+  // Default supplier-code merge list — empty; the user can still add their
+  // own extra pairs from the "🔗 دمج أكواد الموردين" panel, saved to their
+  // browser, on top of the built-in SUPPLIER_ALIASES/SUPPLIER_CODE_PAIRS
+  // merging below.
   var DEFAULT_SUPPLIER_ALIAS_TEXT = '';
+
+  // ---------------------------------------------------------------------
+  // Built-in supplier merging (Riyadh/Jeddah branches of the same company,
+  // etc.). Two codes merge when either (a) they share the same short name
+  // below, or (b) they're listed together in SUPPLIER_CODE_PAIRS. Codes
+  // here are the "normalized" form (leading zeros stripped) since the
+  // source Excel data pads codes to 4 digits (e.g. "0666") while this
+  // table doesn't. See normalizeSupplierCode().
+  // ---------------------------------------------------------------------
+  var SUPPLIER_ALIASES = {
+    "101": "الهبدان", "102": "الطريقي", "103": "المنيف", "104": "المخملية",
+    "106": "الشماسي", "107": "مرساف", "108": "الأصيل", "113": "أمين ناجي",
+    "115": "باوارث", "119": "بسمة الصغير", "124": "بدور", "132": "الشنيبر",
+    "137": "حياكة - الحارثي", "138": "عصام - كيكو", "145": "نما", "147": "المحضار",
+    "151": "الحريبي نسائي", "152": "غيوم", "153": "نستر", "155": "الصنات",
+    "156": "بشائر", "158": "نبيل الرشيدي", "159": "الدفة", "160": "محسن",
+    "161": "نبيل الرشيدي شنط", "163": "القحطاني", "165": "الخيرات", "166": "الدقيل",
+    "171": "ثوب الشعلة", "176": "ركن التوفيق", "178": "دروش", "181": "جومانا",
+    "182": "اليافعي", "183": "طه", "184": "العجلان", "191": "محسن الحريبي",
+    "194": "كنده", "201": "باوارث", "202": "محسن", "203": "جومانا",
+    "207": "سامي", "208": "عادل", "210": "فرع سامي", "212": "صالح أحمد",
+    "213": "محمد صالح", "218": "المنيف", "221": "المخمليه", "230": "السليماني",
+    "232": "العليمي", "238": "المأمون", "240": "حياكة - الحارثي", "246": "نبيل الرشيدي",
+    "247": "الشماسي", "248": "محسن رجالي", "250": "المصباحي", "253": "تراي",
+    "255": "سامي داخلي", "263": "أصالة", "266": "الهراش", "271": "اليافعي",
+    "284": "أضواء", "293": "عجلان", "294": "الإمتياز", "296": "المهري",
+    "298": "البرنس", "302": "نماء", "306": "سندس", "307": "الحريبي رجالي",
+    "309": "سندس", "310": "الرائدة", "313": "الجوري", "317": "عجلان مريول",
+    "318": "العالمية شنط", "401": "نبيل الرشيدي شنط", "402": "الدفه", "406": "سربرايس",
+    "409": "سي يو", "411": "منازل", "413": "سامي داخلي", "414": "بتال",
+    "418": "HRM قديم", "420": "نواعم الاطفال", "421": "اسرار الحجاب", "422": "الاختيار",
+    "424": "مجمع الالعاب", "428": "الخيرات", "436": "نما بلومينج", "437": "زهور دبي",
+    "438": "إيفا", "439": "نستر", "441": "ديلان الشرق", "442": "الملبوسات الذكية",
+    "443": "الرحب", "445": "نواعم", "449": "بازيدان", "454": "قمة تنومة",
+    "455": "رويال تكس", "461": "بخش", "666": "اتش آر ام", "999": "ام بي ايه",
+    "110": "بن حاتم", "444": "سندس", "447": "العيسائي أواني", "430": "الرائدة",
+    "299": "الأصيل", "297": "العجلان", "446": "كنده", "416": "سندس",
+    "423": "العجلان_نوم", "460": "روائع البرنس", "283": "عصام_كيكو", "462": "عبير المواسم",
+    "407": "العجلان", "243": "المالكي", "427": "العبير الأخضر", "205": "شمسان",
+    "463": "ركن الأفضل", "ZZZ": "غير محدد", "142": "فيصل للتجارة", "426": "المشهري",
+    "319": "العيسائي الأواني", "193": "بندر جدة", "140": "الحد الأعلى", "141": "كنز المستقبل",
+    "179": "العجلان وأخوانه", "188": "الرمان", "117": "باوارث مخفض", "180": "نبيل الرشيدي",
+    "172": "تاج الرياض", "148": "السليمان", "190": "حياة الشباب", "457": "الاتجاه الجديد",
+    "321": "الشرقية الدولية", "305": "الصحاح", "199": "روائع المخمل", "286": "بندر جدة"
+  };
+
+  var SUPPLIER_CODE_PAIRS = [
+    ["180", "252"], ["183", "284"], ["182", "271"], ["160", "202"],
+    ["137", "240"], ["181", "203"], ["158", "246"], ["145", "253"],
+    ["117", "251"], ["115", "201"], ["198", "434"], ["317", "459"],
+    ["310", "430"], ["103", "218"], ["306", "416"], ["309", "444"],
+    ["302", "436"], ["104", "221"], ["318", "230"], ["106", "247"],
+    ["165", "428"], ["319", "447"], ["161", "401"], ["178", "293"],
+    ["184", "297"], ["179", "407"], ["159", "402"], ["108", "299"]
+  ];
+
+  // Strip leading zeros so "0666" and "666" compare equal (Excel data pads
+  // to 4 digits; the tables above don't). Non-numeric codes (e.g. "ZZZ")
+  // pass through unchanged.
+  function normalizeSupplierCode(code) {
+    if (code === null || code === undefined) return '';
+    return String(code).trim().toUpperCase().replace(/^0+(?=[0-9A-Z])/, '');
+  }
+
+  // Numeric-aware compare, used both to pick a deterministic group root
+  // (smallest code wins) and to order codes for display.
+  function compareCodes(a, b) {
+    var na = parseFloat(a), nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+    return a < b ? -1 : (a > b ? 1 : 0);
+  }
+
+  // A normalized code shorter than 4 digits is re-padded back to the
+  // source file's usual 4-digit style for display (e.g. "666" -> "0666").
+  function formatCodeForDisplay(normCode) {
+    if (/^[0-9]+$/.test(normCode) && normCode.length < 4) return ('0000' + normCode).slice(-4);
+    return normCode;
+  }
 
   function branchField(code, suffix) { return code + suffix; }
   function branchByCode(code) {
@@ -65,65 +145,126 @@
   var searchTerm = '';
   var statusFilter = 'all';
   var selectedBranch = BRANCHES[0].code;
-  var supplierAliasMap = {}; // alias supplier code -> canonical supplier code, derived from supplierAliasText
+  // supplierGroupRootOf: normalized code -> normalized root code of its group.
+  // supplierGroupKnownCodes: root -> sorted list of every normalized code
+  //   known to belong to that group (from the built-in tables and/or the
+  //   user's own pairs), regardless of which one a given row happens to use.
+  // supplierGroupDisplayName: root -> the group's friendly display name.
+  var supplierGroupRootOf = {};
+  var supplierGroupKnownCodes = {};
+  var supplierGroupDisplayName = {};
 
   // ---------------------------------------------------------------------
   // Supplier code merging — some suppliers have more than one reference
-  // code in the source data. The user lists related codes (one pair per
-  // line, comma-separated); codes connected across multiple lines (e.g.
-  // "0666,0418" then "0666,0999") are grouped transitively into one
-  // supplier. The canonical code for each group is whichever member
-  // appeared earliest as the first code on its line.
+  // code in the source data (e.g. separate codes for their Riyadh and
+  // Jeddah branches). Codes merge into one group when either:
+  //   (a) they share the same short name in SUPPLIER_ALIASES, or
+  //   (b) they're linked in SUPPLIER_CODE_PAIRS (built-in) or by the
+  //       user's own pairs from the "🔗 دمج أكواد الموردين" panel.
+  // Grouping is transitive (union-find) and codes are compared after
+  // normalizeSupplierCode() so "0666" and "666" merge as the same code.
   // ---------------------------------------------------------------------
-  function parseSupplierAliasText(text) {
-    var adj = {};
-    var firstColOrder = [];
-    var seenFirstCol = {};
-    function addEdge(a, b) {
-      adj[a] = adj[a] || {}; adj[a][b] = true;
-      adj[b] = adj[b] || {}; adj[b][a] = true;
-    }
-    (text || '').split('\n').forEach(function (line) {
-      var parts = line.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-      if (parts.length < 2) return;
-      var a = parts[0];
-      for (var i = 1; i < parts.length; i++) addEdge(a, parts[i]);
-      if (!seenFirstCol[a]) { seenFirstCol[a] = true; firstColOrder.push(a); }
-    });
-    var priority = {};
-    firstColOrder.forEach(function (c, i) { priority[c] = i; });
-
-    var visited = {};
-    var map = {};
-    Object.keys(adj).forEach(function (start) {
-      if (visited[start]) return;
-      var queue = [start], comp = [];
-      visited[start] = true;
-      while (queue.length) {
-        var cur = queue.shift();
-        comp.push(cur);
-        Object.keys(adj[cur]).forEach(function (n) {
-          if (!visited[n]) { visited[n] = true; queue.push(n); }
-        });
-      }
-      var canonical = comp.slice().sort(function (x, y) {
-        var px = priority[x] === undefined ? Infinity : priority[x];
-        var py = priority[y] === undefined ? Infinity : priority[y];
-        if (px !== py) return px - py;
-        return x < y ? -1 : (x > y ? 1 : 0);
-      })[0];
-      comp.forEach(function (c) { if (c !== canonical) map[c] = canonical; });
-    });
-    return map;
-  }
-
   function rebuildSupplierAliasMap() {
-    supplierAliasMap = parseSupplierAliasText(state.supplierAliasText || '');
+    var parent = {};
+    function find(x) {
+      if (!(x in parent)) parent[x] = x;
+      var root = x;
+      while (parent[root] !== root) root = parent[root];
+      while (parent[x] !== root) { var next = parent[x]; parent[x] = root; x = next; }
+      return root;
+    }
+    function union(a, b) {
+      a = normalizeSupplierCode(a); b = normalizeSupplierCode(b);
+      if (!a || !b) return;
+      var ra = find(a), rb = find(b);
+      if (ra === rb) return;
+      if (compareCodes(ra, rb) <= 0) parent[rb] = ra; else parent[ra] = rb;
+    }
+
+    // (a) built-in codes that share the same short display name
+    var codesByAliasName = {};
+    Object.keys(SUPPLIER_ALIASES).forEach(function (code) {
+      var name = SUPPLIER_ALIASES[code];
+      (codesByAliasName[name] = codesByAliasName[name] || []).push(code);
+    });
+    Object.keys(codesByAliasName).forEach(function (name) {
+      var codes = codesByAliasName[name];
+      for (var i = 1; i < codes.length; i++) union(codes[0], codes[i]);
+    });
+
+    // (b) built-in explicit pairs, then the user's own pairs (one pair of
+    // codes per comma-separated line; extra columns on a line all link to
+    // the first).
+    SUPPLIER_CODE_PAIRS.forEach(function (pair) { union(pair[0], pair[1]); });
+    var userPairs = [];
+    (state.supplierAliasText || '').split('\n').forEach(function (line) {
+      var parts = line.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      for (var i = 1; i < parts.length; i++) { union(parts[0], parts[i]); userPairs.push([parts[0], parts[i]]); }
+    });
+
+    // Every code ever mentioned across all sources, grouped by resolved root.
+    var allCodes = {};
+    Object.keys(SUPPLIER_ALIASES).forEach(function (c) { allCodes[normalizeSupplierCode(c)] = true; });
+    SUPPLIER_CODE_PAIRS.forEach(function (p) {
+      allCodes[normalizeSupplierCode(p[0])] = true; allCodes[normalizeSupplierCode(p[1])] = true;
+    });
+    userPairs.forEach(function (p) {
+      allCodes[normalizeSupplierCode(p[0])] = true; allCodes[normalizeSupplierCode(p[1])] = true;
+    });
+
+    supplierGroupRootOf = {};
+    supplierGroupKnownCodes = {};
+    Object.keys(allCodes).forEach(function (code) {
+      var root = find(code);
+      supplierGroupRootOf[code] = root;
+      (supplierGroupKnownCodes[root] = supplierGroupKnownCodes[root] || []).push(code);
+    });
+    Object.keys(supplierGroupKnownCodes).forEach(function (root) {
+      supplierGroupKnownCodes[root].sort(compareCodes);
+    });
+
+    // Display name: prefer the root code's own alias entry (deterministic
+    // when a pair links two codes that each carry a different nickname);
+    // otherwise borrow the name from any other member of the group.
+    supplierGroupDisplayName = {};
+    Object.keys(SUPPLIER_ALIASES).forEach(function (code) {
+      var norm = normalizeSupplierCode(code);
+      var root = supplierGroupRootOf[norm] || norm;
+      if (norm === root) supplierGroupDisplayName[root] = SUPPLIER_ALIASES[code];
+    });
+    Object.keys(SUPPLIER_ALIASES).forEach(function (code) {
+      var norm = normalizeSupplierCode(code);
+      var root = supplierGroupRootOf[norm] || norm;
+      if (!supplierGroupDisplayName[root]) supplierGroupDisplayName[root] = SUPPLIER_ALIASES[code];
+    });
   }
 
+  // Returns a normalized, comparable "canonical code" for equality checks
+  // (search, exclude-by-supplier) — not meant for display; use
+  // supplierGroupInfo()/formatCodeForDisplay() for that.
   function resolveSupplierCode(code) {
     if (!code) return code;
-    return supplierAliasMap[code] || code;
+    var norm = normalizeSupplierCode(code);
+    return supplierGroupRootOf[norm] || norm;
+  }
+
+  // The merged display identity for a row: its group's friendly name (or
+  // its own raw SupplierName if the group has no built-in alias) plus every
+  // known code in the group, formatted like the source file (e.g. "0666").
+  function supplierGroupInfo(r) {
+    var norm = normalizeSupplierCode(r && r.SupplierCode);
+    if (!norm) return { name: (r && r.SupplierName) || '', codesText: '' };
+    var root = supplierGroupRootOf[norm] || norm;
+    var knownCodes = supplierGroupKnownCodes[root] || [norm];
+    var name = supplierGroupDisplayName[root] || (r && r.SupplierName) || '';
+    var codesText = knownCodes.map(formatCodeForDisplay).join('/');
+    return { name: name, codesText: codesText };
+  }
+
+  function supplierDisplayText(r) {
+    var info = supplierGroupInfo(r);
+    if (!info.name) return '';
+    return info.codesText ? (info.name + ' (' + info.codesText + ')') : info.name;
   }
 
   function blankRow() {
@@ -341,15 +482,19 @@
   function updateSupplierMergeStatus() {
     var statusEl = document.getElementById('supplierMergeStatus');
     if (!statusEl) return;
-    var aliasCodes = Object.keys(supplierAliasMap);
-    if (!aliasCodes.length) {
-      statusEl.textContent = 'لا يوجد دمج محفوظ بعد.';
-      return;
-    }
-    var groups = {};
-    aliasCodes.forEach(function (c) { groups[supplierAliasMap[c]] = true; });
-    var groupCount = Object.keys(groups).length;
-    statusEl.textContent = 'تم دمج ' + aliasCodes.length + ' كودًا إضافيًا ضمن ' + groupCount + ' مورد.';
+    var counts = {};
+    Object.keys(supplierGroupRootOf).forEach(function (c) {
+      var root = supplierGroupRootOf[c];
+      counts[root] = (counts[root] || 0) + 1;
+    });
+    var mergedRoots = Object.keys(counts).filter(function (root) { return counts[root] > 1; });
+    var mergedCodes = mergedRoots.reduce(function (sum, root) { return sum + counts[root]; }, 0);
+    var userLines = (state.supplierAliasText || '').split('\n').filter(function (line) {
+      return line.split(',').map(function (s) { return s.trim(); }).filter(Boolean).length > 1;
+    }).length;
+    var msg = 'الدمج المدمج تلقائيًا في التطبيق: ' + mergedRoots.length + ' مورد (' + mergedCodes + ' كودًا).';
+    if (userLines) msg += ' + ' + userLines + ' سطر دمج إضافي كتبته أنت.';
+    statusEl.textContent = msg;
   }
 
   function initSupplierMergePanel() {
@@ -413,8 +558,8 @@
         return;
       }
       matches.forEach(function (r) { r.excludedFromReport = true; });
-      var name = matches[0].SupplierName || '';
-      statusEl.textContent = 'تم استبعاد ' + matches.length + ' صنف' + (name ? (' — ' + name) : '') + ' (' + resolved + ') إلى "مستبعدة من التقرير".';
+      var name = supplierGroupDisplayName[resolved] || matches[0].SupplierName || '';
+      statusEl.textContent = 'تم استبعاد ' + matches.length + ' صنف' + (name ? (' — ' + name) : '') + ' (' + formatCodeForDisplay(resolved) + ') إلى "مستبعدة من التقرير".';
       input.value = '';
       renderDashboard();
       renderTableBody();
@@ -451,8 +596,9 @@
 
   function rowMatchesSearch(r) {
     if (!searchTerm) return true;
+    var info = supplierGroupInfo(r);
     var hay = (r.SupplierName + ' ' + r.StockGroupName + ' ' + r.StockCode + ' ' + r.ModelCode + ' ' +
-      r.SupplierCode + ' ' + resolveSupplierCode(r.SupplierCode)).toLowerCase();
+      r.SupplierCode + ' ' + info.name + ' ' + info.codesText).toLowerCase();
     return hay.indexOf(searchTerm) !== -1;
   }
 
@@ -698,10 +844,13 @@
   }
 
   function supplierLineHtml(r) {
-    if (!r.SupplierName) return '';
-    var code = resolveSupplierCode(r.SupplierCode);
-    var text = r.SupplierName + (code ? ' (' + code + ')' : '');
-    return '<br><span style="color:var(--text-muted);font-size:0.75rem">' + escapeAttr(text) + '</span>';
+    var text = supplierDisplayText(r);
+    if (!text) return '';
+    var m = /^(.*?)(\s\([^)]*\))$/.exec(text);
+    var mainPart = m ? m[1] : text;
+    var codePart = m ? m[2] : '';
+    return '<br><span style="color:var(--text-muted);font-size:0.75rem">' + escapeAttr(mainPart) +
+      (codePart ? '<span style="font-size:0.85em">' + escapeAttr(codePart) + '</span>' : '') + '</span>';
   }
 
   function renderBranchReportTable() {
@@ -1040,10 +1189,12 @@
     return '<span class="pdf-status ' + status + '">' + escapeAttr(label) + '</span>';
   }
 
-  function pdfSupplierText(r) {
-    if (!r.SupplierName) return '';
-    var code = resolveSupplierCode(r.SupplierCode);
-    return r.SupplierName + (code ? ' (' + code + ')' : '');
+  function pdfSupplierCellHtml(r) {
+    var text = supplierDisplayText(r);
+    if (!text) return '—';
+    var m = /^(.*?)(\s\([^)]*\))$/.exec(text);
+    if (!m) return escapeAttr(text);
+    return escapeAttr(m[1]) + '<span class="pdf-supplier-code">' + escapeAttr(m[2]) + '</span>';
   }
 
   function pdfColgroupHtml() {
@@ -1064,7 +1215,7 @@
     var desc = escapeAttr((r.StockGroupName || '') + ' — ' + (r.ModelCode || ''));
     return '<tr>' +
       '<td>' + desc + '</td>' +
-      '<td class="pdf-supplier-cell">' + escapeAttr(pdfSupplierText(r)) + '</td>' +
+      '<td class="pdf-supplier-cell">' + pdfSupplierCellHtml(r) + '</td>' +
       '<td class="num">' + fmtPrice(r.UnitPrice) + '</td>' +
       '<td class="num">' + d.soldHere + '</td>' +
       '<td class="num">' + d.soldElsewhere + '</td>' +
