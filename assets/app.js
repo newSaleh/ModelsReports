@@ -28,13 +28,13 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v37 / style v23 — 24/09/2026';
+  var APP_VERSION = 'app v38 / style v23 — 24/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
   var DEFAULT_SETTINGS = {
     hotSoldMin: 5,               // minimum sales in a branch to call it "selling well"
-    opportunityMinTotalSold: 20, // sold this well elsewhere to justify stocking a new branch
+    combinedSellingWellMin: 20,  // total sold across all branches combined to call it "selling well" even if no single branch alone clears hotSoldMin
     lowStockDaysThreshold: 3,    // balance will run out within this many days -> "رصيد منخفض"
     maxBalance: 50               // current balance above this -> flagged as overstock/surplus
   };
@@ -820,7 +820,7 @@
       // this branch or just the others in isolation) so a model that sells
       // steadily split across branches still counts — e.g. 4 here + 14
       // elsewhere clears a threshold of 15 even though neither half alone does.
-      var sellingWell = soldHere >= settings.hotSoldMin || (r.TotalQtySold || 0) >= settings.opportunityMinTotalSold;
+      var sellingWell = soldHere >= settings.hotSoldMin || (r.TotalQtySold || 0) >= settings.combinedSellingWellMin;
       // Days of stock left = balance ÷ average daily sales in this branch,
       // where average daily sales = this branch's sold quantity ÷ the
       // number of days imported (each imported file/day counts as one day).
@@ -846,7 +846,7 @@
         // a manual count instead.
         status = 'checkStock';
         statusLabel = 'لازم تشييك المخزون';
-      } else if (soldElsewhere >= settings.opportunityMinTotalSold && soldHere === 0 && balanceHere === 0) {
+      } else if (topOther.qty >= settings.hotSoldMin && soldHere === 0 && balanceHere === 0) {
         // Checked before the generic reorder case below: a model that has
         // never been carried in this branch at all is a "new opportunity"
         // (consider introducing it), which is a different action from
@@ -1619,17 +1619,24 @@
       '<th class="p-td-num">إجمالي باقي الفروع</th><th>الحالة</th></tr></thead>';
   }
 
-  // The full branch as ONE block — used only to measure natural row
-  // heights (see measureBranchPageChunks) before slicing into per-page
-  // chunks; never captured as-is.
-  function buildBranchPrintHtml(branch, data) {
+  // The full branch (or one capture batch of it — see captureAllBranchPages
+  // below) as ONE block — used only to measure natural row
+  // heights (see measureBranchLayout) before slicing into per-page chunks;
+  // never captured as-is. includeTitle is false for every batch after the
+  // first when a branch's report is too tall for a single html2canvas
+  // capture and has to be split — those batches are pure continuations, so
+  // they skip the title/meta block exactly like a continuation PDF page
+  // does, and baseIndex keeps the "#" column numbering continuous across
+  // batches instead of restarting at 1.
+  function buildBranchPrintHtml(branch, data, includeTitle, baseIndex) {
     var rowsHtml = data.length
-      ? buildPrintRowsHtml(data, 0)
+      ? buildPrintRowsHtml(data, baseIndex || 0)
       : '<tr><td colspan="9" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
-    return '<div class="p-page">' +
+    var titleHtml = includeTitle === false ? '' :
       '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
       '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
-        ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>' +
+        ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>';
+    return '<div class="p-page">' + titleHtml +
       '<table class="p-table">' + PDF_COLGROUP_HTML + buildPrintTheadHtml(branch.name) +
         '<tbody>' + rowsHtml + '</tbody>' +
       '</table>' +
@@ -1667,9 +1674,9 @@
   // height and each row's [top, bottom] — everything captureBranchPages
   // needs to both decide page breaks (never splitting a row) and know
   // exactly where to crop the single capture taken of this same content.
-  function measureBranchLayout(branch, data) {
+  function measureBranchLayout(branch, data, includeTitle) {
     var container = createOffscreenPageEl();
-    container.innerHTML = buildBranchPrintHtml(branch, data);
+    container.innerHTML = buildBranchPrintHtml(branch, data, includeTitle);
     var titleEl = container.querySelector('.p-title');
     var metaEl = container.querySelector('.p-meta');
     var thead = container.querySelector('thead');
@@ -1727,17 +1734,21 @@
     return out;
   }
 
-  // Renders + captures a branch's ENTIRE report exactly ONCE (the slow
-  // step — html2canvas has substantial fixed overhead per call, so doing
-  // it once per branch instead of once per PAGE is what makes exporting a
-  // multi-page report fast), then slices that single tall canvas into
-  // per-page canvases using the pixel measurements from measureBranchLayout.
-  // Continuation pages get the (separately cropped, then re-stacked) header
-  // repeated on top, since the single capture only has it once at the top.
-  function captureBranchPages(branch, data) {
-    var layout = measureBranchLayout(branch, data);
+  // Renders + captures ONE capture batch (a contiguous slice of a branch's
+  // rows — see captureAllBranchPages below for why a branch can need more
+  // than one) exactly ONCE (the slow step — html2canvas has substantial
+  // fixed overhead per call, so doing it once per batch instead of once per
+  // PAGE is what makes exporting a multi-page report fast), then slices
+  // that single tall canvas into per-page canvases using the pixel
+  // measurements from measureBranchLayout. Continuation pages get the
+  // (separately cropped, then re-stacked) header repeated on top, since the
+  // single capture only has it once at the top. includeTitle/baseIndex let
+  // a later batch continue a branch's report (no repeated title block, "#"
+  // numbering carries on) instead of looking like a fresh report.
+  function captureBranchPages(branch, data, includeTitle, baseIndex) {
+    var layout = measureBranchLayout(branch, data, includeTitle);
     var container = createOffscreenPageEl();
-    container.innerHTML = buildBranchPrintHtml(branch, data);
+    container.innerHTML = buildBranchPrintHtml(branch, data, includeTitle, baseIndex);
     return html2canvas(container, { scale: PDF_CAPTURE_SCALE, backgroundColor: '#ffffff', logging: false }).then(function (fullCanvas) {
       document.body.removeChild(container);
       function toPx(cssPx) { return Math.round(cssPx * PDF_CAPTURE_SCALE); }
@@ -1757,8 +1768,58 @@
     });
   }
 
-  // Captures every branch (one html2canvas call each) and assembles all
-  // their pages, in order, into one A4 jsPDF document.
+  // Browsers cap a single <canvas>'s pixel dimensions (Chromium: 65535px
+  // per side) — html2canvas silently produces a blank/broken canvas past
+  // that instead of throwing, which a single capture for a very long
+  // branch report (thousands of rows) can exceed. So a branch's PDF pages
+  // (already computed as an ordered list of row chunks, one per page, by
+  // measureBranchLayout) are captured in BATCHES of consecutive chunks —
+  // few enough per batch to safely stay under the limit — instead of
+  // always one html2canvas call for the whole branch. Most branches still
+  // fit in a single batch (and therefore a single call, same as before);
+  // only unusually long ones split, and only the first batch shows the
+  // title block, so the merged page sequence reads as one continuous report.
+  var CAPTURE_BATCH_MAX_CHUNKS = 40;
+  function captureAllBranchPages(branch, data) {
+    if (!data.length) return captureBranchPages(branch, data, true, 0);
+    var fullLayout = measureBranchLayout(branch, data, true);
+    var chunks = fullLayout.chunks;
+    var chain = Promise.resolve();
+    var allCanvases = [];
+    for (var bi = 0; bi < chunks.length; bi += CAPTURE_BATCH_MAX_CHUNKS) {
+      (function (batchChunks, isFirstBatch) {
+        var rowStart = batchChunks[0].start;
+        var rowEnd = batchChunks[batchChunks.length - 1].end;
+        var batchData = data.slice(rowStart, rowEnd);
+        chain = chain.then(function () {
+          return captureBranchPages(branch, batchData, isFirstBatch, rowStart);
+        }).then(function (canvases) {
+          allCanvases = allCanvases.concat(canvases);
+        });
+      })(chunks.slice(bi, bi + CAPTURE_BATCH_MAX_CHUNKS), bi === 0);
+    }
+    return chain.then(function () { return allCanvases; });
+  }
+
+  // Report content is pure black text/lines on white — no real grayscale
+  // needed — so snapping every pixel to pure black or white before PNG
+  // encoding (instead of leaving html2canvas's anti-aliased gray edges in)
+  // compresses dramatically better (far fewer distinct byte values for
+  // deflate to work with) without any loss of legibility.
+  function thresholdCanvasBW(canvas, cutoff) {
+    var ctx = canvas.getContext('2d');
+    var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var d = imgData.data;
+    for (var i = 0; i < d.length; i += 4) {
+      var v = (d[i] + d[i + 1] + d[i + 2]) / 3 >= cutoff ? 255 : 0;
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return canvas;
+  }
+
+  // Captures every branch and assembles all their pages, in order, into
+  // one A4 jsPDF document.
   function buildPdfFromEntries(entries) {
     var pdf = new jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
     var contentWidthMm = PDF_PAGE_WIDTH_MM - 2 * PDF_MARGIN_MM;
@@ -1766,11 +1827,12 @@
     var pageCount = 0;
     entries.forEach(function (entry) {
       chain = chain.then(function () {
-        return captureBranchPages(entry.branch, entry.data);
+        return captureAllBranchPages(entry.branch, entry.data);
       }).then(function (canvases) {
         canvases.forEach(function (canvas) {
           if (pageCount > 0) pdf.addPage();
           pageCount++;
+          thresholdCanvasBW(canvas, 200);
           var contentHeightMm = canvas.height / canvas.width * contentWidthMm;
           pdf.addImage(canvas.toDataURL('image/png'), 'PNG', PDF_MARGIN_MM, PDF_MARGIN_MM, contentWidthMm, contentHeightMm, undefined, 'SLOW');
         });
