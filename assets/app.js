@@ -28,7 +28,7 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v35 / style v23 — 24/09/2026';
+  var APP_VERSION = 'app v36 / style v23 — 24/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
@@ -1643,7 +1643,13 @@
   var CSS_PX_PER_MM = 96 / 25.4;
   function mmToPx(mm) { return mm * CSS_PX_PER_MM; }
 
-  var PDF_CAPTURE_SCALE = 1.5;
+  // 1.25 keeps text clearly sharp (verified visually against 1.5/2) while
+  // producing meaningfully smaller files; 'SLOW' PNG compression below
+  // trims further at capture time, not export time, so it doesn't add to
+  // the wait. PNG beats JPEG here even at low JPEG quality — this is flat,
+  // sharp-edged text/lines, exactly what PNG's lossless compression suits
+  // and JPEG's block compression doesn't.
+  var PDF_CAPTURE_SCALE = 1.25;
 
   // An off-screen (not display:none, so it still lays out/renders — just
   // positioned off the visible page) container at the page's content width.
@@ -1768,7 +1774,7 @@
           if (pageCount > 0) pdf.addPage();
           pageCount++;
           var contentHeightMm = canvas.height / canvas.width * contentWidthMm;
-          pdf.addImage(canvas.toDataURL('image/png'), 'PNG', PDF_MARGIN_MM, PDF_MARGIN_MM, contentWidthMm, contentHeightMm, undefined, 'MEDIUM');
+          pdf.addImage(canvas.toDataURL('image/png'), 'PNG', PDF_MARGIN_MM, PDF_MARGIN_MM, contentWidthMm, contentHeightMm, undefined, 'SLOW');
         });
       });
     });
