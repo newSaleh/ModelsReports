@@ -28,7 +28,7 @@
   // so it's easy to confirm a browser is actually running the latest build
   // (a stale cached copy would show an older number here) without needing
   // dev tools.
-  var APP_VERSION = 'app v40 / style v23 — 25/09/2026';
+  var APP_VERSION = 'app v41 / style v24 — 25/09/2026';
 
   // Default thresholds for the branch-strength assessment. The user can
   // override these live from the settings panel (⚙️ إعدادات التقييم).
@@ -1572,336 +1572,192 @@
   });
 
   // ---------------------------------------------------------------------
-  // PDF export — built directly as a real PDF file (html2canvas + jsPDF),
-  // not the browser's print dialog. window.print()'s output paper size
-  // depends on the browser/OS's own remembered paper-size preference,
-  // which can silently override the page's declared @page size — verified
-  // broken in practice on iOS Safari (still produced US Letter after the
-  // @page fix). Building the file directly makes the page size (A4) and
-  // layout exactly what's declared, regardless of any browser setting,
-  // and captures the SAME rendering already shown on screen (WYSIWYG),
-  // sidestepping the browser's separate print-rendering pass entirely.
+  // PDF export — a real print page (actual text, not a captured image),
+  // opened in a new tab and sent to window.print() so the browser's own
+  // "Save as PDF" produces small, crisp, selectable text. This replaces an
+  // earlier html2canvas+jsPDF pipeline that rasterized each page: real text
+  // has no canvas-size ceiling to exceed, no anti-aliasing to lose to a
+  // black/white threshold, and compresses far smaller on its own.
   // ---------------------------------------------------------------------
   function fmtPrice(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
-  // Short one-line labels — only critical/warning/opportunity ever reach
-  // print (see branchReportData), so that's all this needs to cover.
-  var PDF_STATUS_LABELS = {
-    checkStock: 'لازم تشييك المخزون',
-    critical: 'خلص',
-    warning: 'باقي شوي',
-    opportunity: 'ما نزل'
+  function escapeHtml(v) {
+    return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // Wraps every run of digits (with an optional leading minus) in <bdi> so
+  // Western numerals inside an RTL sentence (the period line's dates) keep
+  // their own left-to-right internal order regardless of surrounding text.
+  function isolateDigitsHtml(text) {
+    return escapeHtml(text).replace(/(-?\d[\d.,]*)/g, '<bdi>$1</bdi>');
+  }
+
+  // Short one-line labels + per-status color for the print output — only
+  // critical/warning/opportunity/checkStock ever reach print (see
+  // branchReportData), so that's all this needs to cover. Order here is
+  // also the summary-badge display order.
+  var PRINT_STATUS_META = {
+    opportunity: { label: 'ما نزل', bg: '#FFE100', color: '#000' },
+    checkStock: { label: 'لازم تشييك المخزون', bg: '#BDBDBD', color: '#000' },
+    warning: { label: 'باقي شوي', bg: '#F26B6B', color: '#000' },
+    critical: { label: 'خلص', bg: '#FB8C00', color: '#000' }
   };
 
-  function pdfSupplierCellHtml(r) {
-    var text = supplierDisplayText(r);
-    if (!text) return '—';
-    var m = /^(.*?)(\s\([^)]*\))$/.exec(text);
-    if (!m) return escapeAttr(text);
-    return escapeAttr(m[1]) + '<span class="p-td-suppliercode">' + escapeAttr(m[2]) + '</span>';
+  // Row order inside each branch's print output: ascending by supplier
+  // root code (numeric; codeless suppliers last), then by the category
+  // implied by "البيان" — رجالي، نسائي، ولادي، بناتي، أطفال/مواليد، ثم كل
+  // ما عداها — using whichever of those words appears earliest in the
+  // text. Anything still tied keeps its existing relative order (data is
+  // already sorted soldElsewhere/soldHere descending by branchReportData).
+  var PRINT_SECTION_KEYWORDS = [
+    ['رجالي', 0], ['نسائي', 1], ['ولادي', 2], ['بناتي', 3],
+    ['أطفال', 4], ['اطفال', 4], ['طفل', 4], ['مواليد', 4], ['مولود', 4]
+  ];
+  function printSectionRank(text) {
+    var t = text || '';
+    var best = null;
+    PRINT_SECTION_KEYWORDS.forEach(function (pair) {
+      var idx = t.indexOf(pair[0]);
+      if (idx >= 0 && (best === null || idx < best[0])) best = [idx, pair[1]];
+    });
+    return best ? best[1] : 5;
+  }
+  function printSupplierSortKey(row) {
+    var code = resolveSupplierCode(row.SupplierCode);
+    var num = parseFloat(code);
+    return (code && !isNaN(num)) ? [0, num, ''] : [1, 0, code || ''];
+  }
+  function comparePrintKeys(a, b) {
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] < b[i]) return -1;
+      if (a[i] > b[i]) return 1;
+    }
+    return 0;
+  }
+  function sortRowsForPrint(data) {
+    var decorated = data.map(function (d, i) {
+      return { d: d, i: i, supplierKey: printSupplierSortKey(d.row), sectionRank: printSectionRank(d.row.StockGroupName) };
+    });
+    decorated.sort(function (x, y) {
+      return comparePrintKeys(x.supplierKey, y.supplierKey) || (x.sectionRank - y.sectionRank) || (x.i - y.i);
+    });
+    return decorated.map(function (x) { return x.d; });
   }
 
-  function buildPrintRowsHtml(data, baseIndex) {
-    return data.map(function (d, i) {
-      var r = d.row;
-      var desc = escapeAttr(r.StockGroupName || '');
-      return '<tr>' +
-        '<td class="p-td-num">' + (baseIndex + i + 1) + '</td>' +
-        '<td>' + desc + '</td>' +
-        '<td>' + escapeAttr(r.ModelCode || '') + '</td>' +
-        '<td>' + pdfSupplierCellHtml(r) + '</td>' +
-        '<td class="p-td-num">' + fmtPrice(r.UnitPrice) + '</td>' +
-        '<td class="p-td-num">' + d.soldHere + '</td>' +
-        '<td class="p-td-num">' + d.balanceHere + '</td>' +
-        '<td class="p-td-num">' + d.soldElsewhere + '</td>' +
-        '<td>' + escapeAttr(PDF_STATUS_LABELS[d.status] || d.statusLabel) + '</td>' +
-        '</tr>';
+  // The "المورد" cell: supplier name plus every known reference code for
+  // its (possibly merged) group in parentheses, in a smaller font — reuses
+  // the same name/codes the on-screen preview shows via supplierDisplayText.
+  function printSupplierHtml(row) {
+    var info = supplierGroupInfo(row);
+    if (!info.name) return '—';
+    var codesHtml = info.codesText ? ' <span class="codes">(' + escapeHtml(info.codesText) + ')</span>' : '';
+    return escapeHtml(info.name) + codesHtml;
+  }
+
+  var PRINT_COLUMN_WIDTHS = [3.5, 15, 13, 23.5, 8.5, 7, 6, 8, 15.5];
+  var PRINT_COLGROUP_HTML = '<colgroup>' + PRINT_COLUMN_WIDTHS.map(function (w) {
+    return '<col style="width:' + w + '%">';
+  }).join('') + '</colgroup>';
+
+  function buildPrintBranchSection(entry, isFirst) {
+    var b = entry.branch, data = entry.data;
+    var rows = sortRowsForPrint(data);
+    var counts = { opportunity: 0, checkStock: 0, warning: 0, critical: 0 };
+    data.forEach(function (d) { if (counts[d.status] !== undefined) counts[d.status]++; });
+    var legendHtml = ['opportunity', 'checkStock', 'warning', 'critical'].map(function (key) {
+      var meta = PRINT_STATUS_META[key];
+      return '<span class="chip" style="background:' + meta.bg + ';color:' + meta.color + '">' + meta.label + ': ' + counts[key] + '</span>';
     }).join('');
-  }
 
-  var PDF_COLGROUP_HTML = '<colgroup><col style="width:5%"><col style="width:14%"><col style="width:14%"><col style="width:17%">' +
-    '<col style="width:10%"><col style="width:9%"><col style="width:8%"><col style="width:8%"><col style="width:15%"></colgroup>';
+    var bodyHtml = rows.length ? rows.map(function (d, i) {
+      var r = d.row;
+      var meta = PRINT_STATUS_META[d.status] || { label: d.statusLabel, bg: '#fff', color: '#000' };
+      return '<tr>' +
+        '<td class="n">' + (i + 1) + '</td>' +
+        '<td class="desc">' + escapeHtml(r.StockGroupName || '') + '</td>' +
+        '<td class="ltr">' + escapeHtml(r.ModelCode || '') + '</td>' +
+        '<td class="sup">' + printSupplierHtml(r) + '</td>' +
+        '<td class="n">' + fmtPrice(r.UnitPrice) + '</td>' +
+        '<td class="n">' + d.soldHere + '</td>' +
+        '<td class="n">' + d.balanceHere + '</td>' +
+        '<td class="n">' + d.soldElsewhere + '</td>' +
+        '<td class="st" style="background:' + meta.bg + ';color:' + meta.color + '">' + escapeHtml(meta.label) + '</td>' +
+      '</tr>';
+    }).join('') : '<tr><td colspan="9" class="empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
 
-  function buildPrintTheadHtml(branchName) {
-    return '<thead><tr><th>#</th><th>البيان</th><th>الموديل</th><th>المورد</th><th class="p-td-num">السعر</th>' +
-      '<th class="p-td-num">مبيعات ' + branchName + '</th><th class="p-td-num">الرصيد</th>' +
-      '<th class="p-td-num">إجمالي باقي الفروع</th><th>الحالة</th></tr></thead>';
-  }
-
-  // The full branch (or one capture batch of it — see captureAllBranchPages
-  // below) as ONE block — used only to measure natural row
-  // heights (see measureBranchLayout) before slicing into per-page chunks;
-  // never captured as-is. includeTitle is false for every batch after the
-  // first when a branch's report is too tall for a single html2canvas
-  // capture and has to be split — those batches are pure continuations, so
-  // they skip the title/meta block exactly like a continuation PDF page
-  // does, and baseIndex keeps the "#" column numbering continuous across
-  // batches instead of restarting at 1.
-  function buildBranchPrintHtml(branch, data, includeTitle, baseIndex) {
-    var rowsHtml = data.length
-      ? buildPrintRowsHtml(data, baseIndex || 0)
-      : '<tr><td colspan="9" class="p-empty">لا توجد أصناف تحتاج انتباهًا في هذا الفرع ضمن الفلاتر الحالية.</td></tr>';
-    var titleHtml = includeTitle === false ? '' :
-      '<h1 class="p-title">تقرير فرع ' + branch.name + ' (' + branch.code + ')</h1>' +
-      '<p class="p-meta">الفترة: من ' + (state.dateFrom || '—') + ' إلى ' + (state.dateTo || '—') +
-        ' &nbsp;|&nbsp; تاريخ الإصدار: ' + new Date().toLocaleDateString('en-GB') + '</p>';
-    return '<div class="p-page">' + titleHtml +
-      '<table class="p-table">' + PDF_COLGROUP_HTML + buildPrintTheadHtml(branch.name) +
-        '<tbody>' + rowsHtml + '</tbody>' +
+    var periodText = 'الفترة: ' + (state.dateFrom || '؟') + ' إلى ' + (state.dateTo || '؟');
+    return '<section' + (isFirst ? '' : ' class="brk"') + '>' +
+      '<h1>تقرير فرع ' + escapeHtml(b.name) + ' (' + escapeHtml(b.code) + ')</h1>' +
+      '<p class="meta">' + isolateDigitsHtml(periodText) + '</p>' +
+      '<p class="legend">' + legendHtml + '</p>' +
+      '<table>' + PRINT_COLGROUP_HTML +
+        '<thead><tr><th>#</th><th>البيان</th><th>الموديل</th><th>المورد</th><th>السعر</th>' +
+          '<th>مبيعات<br>' + escapeHtml(b.name) + '</th><th>الرصيد</th><th>إجمالي مبيعات<br>باقي الفروع</th><th>الحالة</th></tr></thead>' +
+        '<tbody>' + bodyHtml + '</tbody>' +
       '</table>' +
-    '</div>';
+    '</section>';
   }
 
+  var PRINT_STYLE_CSS =
+    '@page { size: A4 portrait; margin: 8mm 7mm; }' +
+    '* { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }' +
+    'body { font-family: "Segoe UI", Tahoma, Arial, sans-serif; color:#000; margin:0; font-size: 12pt; }' +
+    'section.brk { page-break-before: always; }' +
+    'h1 { font-size: 17pt; margin: 0 0 1px; border-bottom: 1px solid #333; padding-bottom: 2px; }' +
+    '.meta { font-size: 11pt; margin: 2px 0; font-weight: 600; }' +
+    '.legend { margin: 2px 0 5px; }' +
+    '.chip { display:inline-block; padding: 1px 8px; margin-left: 5px; border: 1px solid #555; border-radius: 4px; font-weight: 700; font-size: 10.5pt; }' +
+    'table { width: 100%; border-collapse: collapse; table-layout: fixed; }' +
+    'thead { display: table-header-group; }' +
+    'tr { page-break-inside: avoid; }' +
+    'th { background:#E4E4E4; color:#000; font-size: 10.5pt; line-height: 1.1; padding: 2px 2px; border: 1px solid #555; }' +
+    'td { border: 1px solid #777; padding: 0 4px; height: 13.3mm; vertical-align: middle; font-weight: 600; line-height: 1.15; overflow-wrap: anywhere; }' +
+    'td.n { direction: ltr; unicode-bidi: isolate; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }' +
+    'td.ltr { direction: ltr; unicode-bidi: isolate; text-align: center; font-weight: 800; font-size: 12pt; white-space: nowrap; overflow-wrap: normal; }' +
+    'td.desc { font-size: 11.5pt; }' +
+    'td.sup { font-size: 11pt; overflow-wrap: normal; }' +
+    '.codes { direction: ltr; unicode-bidi: isolate; display:inline-block; white-space: nowrap; font-size: 9pt; font-weight: 600; }' +
+    'td.st { text-align: center; font-weight: 800; font-size: 10.8pt; overflow-wrap: normal; padding: 0 2px; }' +
+    'td.empty { text-align:center; padding: 18px; }';
 
-  var PDF_PAGE_WIDTH_MM = 210, PDF_PAGE_HEIGHT_MM = 297, PDF_MARGIN_MM = 10;
-  var CSS_PX_PER_MM = 96 / 25.4;
-  function mmToPx(mm) { return mm * CSS_PX_PER_MM; }
-
-  // 1.25 was tried first for smaller files, but real printed/viewed pages
-  // showed visibly jagged small text (supplier-code sub-text especially)
-  // once every pixel is snapped to pure black/white (see thresholdCanvasBW
-  // below) — that quantization removes the anti-aliasing a lower-resolution
-  // capture relies on for smooth-looking edges. 2 fixes that; the B/W
-  // thresholding still keeps file size far below a non-thresholded capture
-  // at the same scale. 'SLOW' PNG compression below trims further at
-  // capture time, not export time, so it doesn't add to the wait. PNG beats
-  // JPEG here even at low JPEG quality — this is flat, sharp-edged
-  // text/lines, exactly what PNG's lossless compression suits and JPEG's
-  // block compression doesn't.
-  var PDF_CAPTURE_SCALE = 2;
-
-  // An off-screen (not display:none, so it still lays out/renders — just
-  // positioned off the visible page) container at the page's content width.
-  function createOffscreenPageEl() {
-    var el = document.createElement('div');
-    el.style.position = 'fixed';
-    el.style.top = '0';
-    el.style.left = '-99999px';
-    el.style.width = mmToPx(PDF_PAGE_WIDTH_MM - 2 * PDF_MARGIN_MM) + 'px';
-    el.style.background = '#fff';
-    document.body.appendChild(el);
-    return el;
+  function buildPrintDocument(entries) {
+    var sectionsHtml = entries.map(function (entry, idx) { return buildPrintBranchSection(entry, idx === 0); }).join('');
+    var title = entries.length > 1 ? 'تقارير الفروع' : ('تقرير فرع ' + entries[0].branch.name);
+    return '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>' + escapeHtml(title) + '</title>' +
+      '<style>' + PRINT_STYLE_CSS + '</style></head><body>' + sectionsHtml + '</body></html>';
   }
 
-  // Renders a branch's FULL table (title/meta/header/every row) off-screen
-  // ONCE and reads back real layout measurements — title+header block
-  // height and each row's [top, bottom] — everything captureBranchPages
-  // needs to both decide page breaks (never splitting a row) and know
-  // exactly where to crop the single capture taken of this same content.
-  function measureBranchLayout(branch, data, includeTitle) {
-    var container = createOffscreenPageEl();
-    container.innerHTML = buildBranchPrintHtml(branch, data, includeTitle);
-    var titleEl = container.querySelector('.p-title');
-    var metaEl = container.querySelector('.p-meta');
-    var thead = container.querySelector('thead');
-    var rows = container.querySelectorAll('tbody tr');
-    var containerTop = container.getBoundingClientRect().top;
-
-    var titleBlockHeight = (titleEl ? titleEl.getBoundingClientRect().height : 0) +
-      (metaEl ? metaEl.getBoundingClientRect().height : 0) + 8; // + table margin-top
-    var headerTop = titleBlockHeight;
-    var headerHeight = thead ? thead.getBoundingClientRect().height : 0;
-    var rowSpans = Array.prototype.map.call(rows, function (tr) {
-      var r = tr.getBoundingClientRect();
-      return { top: r.top - containerTop, bottom: r.bottom - containerTop };
-    });
-
-    var pageContentHeightPx = mmToPx(PDF_PAGE_HEIGHT_MM - 2 * PDF_MARGIN_MM);
-    var chunks = [];
-    var chunkStart = 0;
-    var usedHeight = titleBlockHeight + headerHeight;
-    for (var i = 0; i < rowSpans.length; i++) {
-      var rh = rowSpans[i].bottom - rowSpans[i].top;
-      if (i > chunkStart && usedHeight + rh > pageContentHeightPx) {
-        chunks.push({ start: chunkStart, end: i });
-        chunkStart = i;
-        usedHeight = headerHeight + rh; // continuation pages repeat only the header, not the title
-      } else {
-        usedHeight += rh;
-      }
-    }
-    chunks.push({ start: chunkStart, end: rowSpans.length });
-
-    document.body.removeChild(container);
-    return { titleBlockHeight: titleBlockHeight, headerTop: headerTop, headerHeight: headerHeight, rowSpans: rowSpans, chunks: chunks };
+  // Opens a new tab with the print-ready page and triggers the browser's
+  // print dialog — the user picks "Save as PDF" there. A short delay before
+  // print() lets the new tab actually paint first.
+  function openPrintWindow(entries) {
+    if (!entries.length) { alert('ولّد التقارير أولًا.'); return; }
+    var w = window.open('', '_blank');
+    if (!w) { alert('اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد الضغط.'); return; }
+    w.document.open();
+    w.document.write(buildPrintDocument(entries));
+    w.document.close();
+    setTimeout(function () { w.focus(); w.print(); }, 400);
   }
 
-  function cropCanvasVertical(src, yStart, yEnd) {
-    var out = document.createElement('canvas');
-    out.width = src.width;
-    out.height = Math.max(1, yEnd - yStart);
-    out.getContext('2d').drawImage(src, 0, yStart, src.width, out.height, 0, 0, src.width, out.height);
-    return out;
-  }
-
-  function stackCanvasesVertical(parts) {
-    var width = parts[0].width;
-    var totalHeight = parts.reduce(function (sum, c) { return sum + c.height; }, 0);
-    var out = document.createElement('canvas');
-    out.width = width;
-    out.height = totalHeight;
-    var ctx = out.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, width, totalHeight);
-    var y = 0;
-    parts.forEach(function (c) { ctx.drawImage(c, 0, y); y += c.height; });
-    return out;
-  }
-
-  // Renders + captures ONE capture batch (a contiguous slice of a branch's
-  // rows — see captureAllBranchPages below for why a branch can need more
-  // than one) exactly ONCE (the slow step — html2canvas has substantial
-  // fixed overhead per call, so doing it once per batch instead of once per
-  // PAGE is what makes exporting a multi-page report fast), then slices
-  // that single tall canvas into per-page canvases using the pixel
-  // measurements from measureBranchLayout. Continuation pages get the
-  // (separately cropped, then re-stacked) header repeated on top, since the
-  // single capture only has it once at the top. includeTitle/baseIndex let
-  // a later batch continue a branch's report (no repeated title block, "#"
-  // numbering carries on) instead of looking like a fresh report.
-  function captureBranchPages(branch, data, includeTitle, baseIndex) {
-    var layout = measureBranchLayout(branch, data, includeTitle);
-    var container = createOffscreenPageEl();
-    container.innerHTML = buildBranchPrintHtml(branch, data, includeTitle, baseIndex);
-    return html2canvas(container, { scale: PDF_CAPTURE_SCALE, backgroundColor: '#ffffff', logging: false }).then(function (fullCanvas) {
-      document.body.removeChild(container);
-      function toPx(cssPx) { return Math.round(cssPx * PDF_CAPTURE_SCALE); }
-      var headerCanvas = null;
-      return layout.chunks.map(function (chunk, idx) {
-        if (idx === 0) {
-          var endY = chunk.end > 0 ? layout.rowSpans[chunk.end - 1].bottom : (layout.headerTop + layout.headerHeight);
-          return cropCanvasVertical(fullCanvas, 0, toPx(endY));
-        }
-        if (!headerCanvas) headerCanvas = cropCanvasVertical(fullCanvas, toPx(layout.headerTop), toPx(layout.headerTop + layout.headerHeight));
-        var bodySlice = cropCanvasVertical(fullCanvas, toPx(layout.rowSpans[chunk.start].top), toPx(layout.rowSpans[chunk.end - 1].bottom));
-        return stackCanvasesVertical([headerCanvas, bodySlice]);
-      });
-    }, function (err) {
-      document.body.removeChild(container);
-      throw err;
-    });
-  }
-
-  // Browsers cap a single <canvas>'s pixel dimensions (Chromium: 65535px
-  // per side) — html2canvas silently produces a blank/broken canvas past
-  // that instead of throwing, which a single capture for a very long
-  // branch report (thousands of rows) can exceed. So a branch's PDF pages
-  // (already computed as an ordered list of row chunks, one per page, by
-  // measureBranchLayout) are captured in BATCHES of consecutive chunks —
-  // few enough per batch to safely stay under the limit — instead of
-  // always one html2canvas call for the whole branch. Most branches still
-  // fit in a single batch (and therefore a single call, same as before);
-  // only unusually long ones split, and only the first batch shows the
-  // title block, so the merged page sequence reads as one continuous report.
-  // Computed from PDF_CAPTURE_SCALE (not a fixed page count) so raising the
-  // capture scale for sharper text automatically shrinks the safe batch
-  // size instead of silently exceeding the canvas limit again.
-  var SAFE_CANVAS_PX_HEIGHT = 60000; // margin below the ~65535px browser cap
-  function captureBatchMaxChunks() {
-    var pageContentHeightPx = mmToPx(PDF_PAGE_HEIGHT_MM - 2 * PDF_MARGIN_MM);
-    return Math.max(1, Math.floor(SAFE_CANVAS_PX_HEIGHT / (pageContentHeightPx * PDF_CAPTURE_SCALE)));
-  }
-  function captureAllBranchPages(branch, data) {
-    if (!data.length) return captureBranchPages(branch, data, true, 0);
-    var fullLayout = measureBranchLayout(branch, data, true);
-    var chunks = fullLayout.chunks;
-    var batchMaxChunks = captureBatchMaxChunks();
-    var chain = Promise.resolve();
-    var allCanvases = [];
-    for (var bi = 0; bi < chunks.length; bi += batchMaxChunks) {
-      (function (batchChunks, isFirstBatch) {
-        var rowStart = batchChunks[0].start;
-        var rowEnd = batchChunks[batchChunks.length - 1].end;
-        var batchData = data.slice(rowStart, rowEnd);
-        chain = chain.then(function () {
-          return captureBranchPages(branch, batchData, isFirstBatch, rowStart);
-        }).then(function (canvases) {
-          allCanvases = allCanvases.concat(canvases);
-        });
-      })(chunks.slice(bi, bi + batchMaxChunks), bi === 0);
-    }
-    return chain.then(function () { return allCanvases; });
-  }
-
-  // Report content is pure black text/lines on white — no real grayscale
-  // needed — so snapping every pixel to pure black or white before PNG
-  // encoding (instead of leaving html2canvas's anti-aliased gray edges in)
-  // compresses dramatically better (far fewer distinct byte values for
-  // deflate to work with) without any loss of legibility.
-  function thresholdCanvasBW(canvas, cutoff) {
-    var ctx = canvas.getContext('2d');
-    var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    var d = imgData.data;
-    for (var i = 0; i < d.length; i += 4) {
-      var v = (d[i] + d[i + 1] + d[i + 2]) / 3 >= cutoff ? 255 : 0;
-      d[i] = d[i + 1] = d[i + 2] = v;
-    }
-    ctx.putImageData(imgData, 0, 0);
-    return canvas;
-  }
-
-  // Captures every branch and assembles all their pages, in order, into
-  // one A4 jsPDF document.
-  function buildPdfFromEntries(entries) {
-    var pdf = new jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
-    var contentWidthMm = PDF_PAGE_WIDTH_MM - 2 * PDF_MARGIN_MM;
-    var chain = Promise.resolve();
-    var pageCount = 0;
-    entries.forEach(function (entry) {
-      chain = chain.then(function () {
-        return captureAllBranchPages(entry.branch, entry.data);
-      }).then(function (canvases) {
-        canvases.forEach(function (canvas) {
-          if (pageCount > 0) pdf.addPage();
-          pageCount++;
-          thresholdCanvasBW(canvas, 200);
-          var contentHeightMm = canvas.height / canvas.width * contentWidthMm;
-          pdf.addImage(canvas.toDataURL('image/png'), 'PNG', PDF_MARGIN_MM, PDF_MARGIN_MM, contentWidthMm, contentHeightMm, undefined, 'SLOW');
-        });
-      });
-    });
-    return chain.then(function () { return pdf; });
-  }
-
-  function withPdfExportStatus(btn, fn) {
-    var originalText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = '⏳ جارٍ تجهيز PDF...';
-    return fn().catch(function (err) {
-      console.error('PDF export failed', err);
-      alert('تعذّر تصدير PDF. حاول مجددًا.');
-    }).finally(function () {
-      btn.disabled = false;
-      btn.textContent = originalText;
-    });
-  }
-
-  function exportBranchReportToPdf(branchCode, btn) {
+  function exportBranchReportToPdf(branchCode) {
     var entry = lastGeneratedReports && lastGeneratedReports[branchCode];
-    if (!entry) return Promise.resolve();
-    return withPdfExportStatus(btn, function () {
-      return buildPdfFromEntries([entry]).then(function (pdf) {
-        pdf.save('تقرير فرع ' + entry.branch.name + ' ' + entry.branch.code + ' ' + (state.dateFrom || '') + '-' + (state.dateTo || '') + '.pdf');
-      });
-    });
+    if (!entry) return;
+    openPrintWindow([entry]);
   }
 
-  // All 5 branches into one PDF file, each starting on its own fresh page.
-  function exportAllBranchesToPdf(btn) {
-    if (!lastGeneratedReports) return Promise.resolve();
-    return withPdfExportStatus(btn, function () {
-      var entries = BRANCHES.map(function (b) { return lastGeneratedReports[b.code]; }).filter(Boolean);
-      return buildPdfFromEntries(entries).then(function (pdf) {
-        pdf.save('تقارير كل الفروع ' + (state.dateFrom || '') + '-' + (state.dateTo || '') + '.pdf');
-      });
-    });
+  // All 5 branches into one print job, each starting on its own fresh page.
+  function exportAllBranchesToPdf() {
+    if (!lastGeneratedReports) { alert('ولّد التقارير أولًا.'); return; }
+    var entries = BRANCHES.map(function (b) { return lastGeneratedReports[b.code]; }).filter(Boolean);
+    openPrintWindow(entries);
   }
 
   document.addEventListener('click', function (e) {
     var btn = e.target.closest && e.target.closest('.pdf-btn');
     if (!btn || btn.disabled) return;
-    if (btn.id === 'btnExportAllPdf') exportAllBranchesToPdf(btn);
-    else exportBranchReportToPdf(btn.getAttribute('data-branch'), btn);
+    if (btn.id === 'btnExportAllPdf') exportAllBranchesToPdf();
+    else exportBranchReportToPdf(btn.getAttribute('data-branch'));
   });
 
   // ---------------------------------------------------------------------
